@@ -8,6 +8,7 @@ export default function Tabs({ tabs, value, onChange, className }) {
         const active = tab.value === value;
         return (
           <button
+            type="button"
             key={tab.value}
             onClick={() => onChange(tab.value)}
             className={clsx(

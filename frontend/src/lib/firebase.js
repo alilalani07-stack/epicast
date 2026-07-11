@@ -14,6 +14,7 @@
  */
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth, setPersistence, browserLocalPersistence } from 'firebase/auth';
+import { getFirestore } from 'firebase/firestore';
 
 export const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -52,6 +53,7 @@ function createApp() {
 
 export const firebaseApp = createApp();
 export const firebaseAuth = getAuth(firebaseApp);
+export const db = getFirestore(firebaseApp);
 
 if (isFirebaseConfigured) {
   // Persist sessions across reloads/tabs.

@@ -10,7 +10,7 @@ from slowapi import _rate_limit_exceeded_handler
 load_dotenv()
 
 from database import run_migrations
-from routers import areas, reports, zones, alerts, forecast, stats
+from routers import areas, reports, zones, alerts, forecast, stats, auth_routes
 from auth import verify_token
 from limiter import limiter
 
@@ -78,6 +78,7 @@ app.include_router(zones.router, dependencies=[Depends(verify_token)])
 app.include_router(alerts.router, dependencies=[Depends(verify_token)])
 app.include_router(forecast.router, dependencies=[Depends(verify_token)])
 app.include_router(stats.router, dependencies=[Depends(verify_token)])
+app.include_router(auth_routes.router)
 
 #Health check endpoint for liveness probes
 

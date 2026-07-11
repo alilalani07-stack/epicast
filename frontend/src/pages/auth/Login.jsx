@@ -57,11 +57,17 @@ export default function Login() {
     }
     setLoading(true);
     try {
-      await signIn({ email, password, role });
+      const user = await signIn({ email, password, role });
+      const verifiedRole = user?.role;
       toast.success('Signed in');
+      
+      if (verifiedRole && verifiedRole !== role) {
+        toast.error(`This account is registered as ${verifiedRole === ROLES.AUTHORITY ? 'Authority' : 'Clinic'} — redirecting you.`);
+      }
+
       // Honor the original destination if the user was bounced from a protected route.
       const fromState = location.state?.from?.pathname;
-      const dest = fromState || (role === ROLES.AUTHORITY ? '/authority/dashboard' : '/clinic/dashboard');
+      const dest = fromState || (verifiedRole === ROLES.AUTHORITY ? '/authority/dashboard' : '/clinic/dashboard');
       // `replace` so Back from the dashboard does not return to /login.
       navigate(dest, { replace: true });
     } catch (err) {

@@ -19,7 +19,9 @@ import {
   updateProfile,
   sendPasswordResetEmail,
 } from 'firebase/auth';
-import { firebaseAuth, isFirebaseConfigured } from '../lib/firebase.js';
+import { firebaseAuth, isFirebaseConfigured, db } from '../lib/firebase.js';
+import api, { unwrap } from './api.js';
+import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 
 const ROLE_KEY = 'epicast_role';
 const DEMO_USER_KEY = 'epicast_demo_user';
@@ -27,6 +29,35 @@ const TOKEN_KEY = 'epicast_token';
 
 /* ─── Role storage (works for both real Firebase users and demo users) ─── */
 export const ROLES = { AUTHORITY: 'authority', CLINIC: 'clinic' };
+
+export async function getFirestoreRole(uid) {
+  if (!isFirebaseConfigured) return null;
+  try {
+    const docRef = doc(db, 'users', uid);
+    const docSnap = await getDoc(docRef);
+    if (docSnap.exists()) {
+      return docSnap.data().role || null;
+    }
+  } catch (err) {
+    console.error('Error fetching Firestore role:', err);
+  }
+  return null;
+}
+
+export async function claimFirestoreRole(uid, role, email) {
+  if (!isFirebaseConfigured) return;
+  try {
+    const docRef = doc(db, 'users', uid);
+    await setDoc(docRef, {
+      role,
+      email,
+      createdAt: serverTimestamp(),
+    });
+  } catch (err) {
+    console.error('Error claiming Firestore role:', err);
+    throw err;
+  }
+}
 
 export function getRoleFromToken(token) {
   if (!token) return null;
@@ -93,10 +124,10 @@ function normalize(fbUser, role) {
 
 export async function signIn({ email, password, role }) {
   if (!email || !password) throw new Error('Email and password are required.');
-  if (role) setStoredRole(role);
 
   if (!isFirebaseConfigured) {
     // Demo mode: any non-empty credential is accepted.
+    if (role) setStoredRole(role);
     const user = {
       uid: `demo-${btoa(email).slice(0, 10)}`,
       email,
@@ -110,9 +141,31 @@ export async function signIn({ email, password, role }) {
 
   try {
     const cred = await signInWithEmailAndPassword(firebaseAuth, email, password);
-    const token = await cred.user.getIdToken();
+    let token = await cred.user.getIdToken();
     localStorage.setItem(TOKEN_KEY, token);
-    return normalize(cred.user, role);
+
+    // Read users/{uid} from Firestore.
+    let verifiedRole = await getFirestoreRole(cred.user.uid);
+
+    if (!verifiedRole) {
+      // If no Firestore document exists, create one using the selected tab's role (migration support).
+      const roleToClaim = role || ROLES.AUTHORITY;
+      await claimFirestoreRole(cred.user.uid, roleToClaim, email);
+      
+      // Also ensure backend custom claims are set
+      try {
+        await api.post('/auth/claim-role', { role: roleToClaim }).then(unwrap);
+      } catch (claimErr) {
+        console.warn('Backend role claim failed during migration:', claimErr);
+      }
+      
+      // Force refresh the token to get the new claim.
+      token = await cred.user.getIdToken(true);
+      localStorage.setItem(TOKEN_KEY, token);
+      verifiedRole = roleToClaim;
+    }
+
+    return normalize(cred.user, verifiedRole);
   } catch (err) {
     throw new Error(prettifyFirebaseError(err));
   }
@@ -120,9 +173,9 @@ export async function signIn({ email, password, role }) {
 
 export async function register({ email, password, displayName, role }) {
   if (!email || !password) throw new Error('Email and password are required.');
-  if (role) setStoredRole(role);
 
   if (!isFirebaseConfigured) {
+    if (role) setStoredRole(role);
     const user = {
       uid: `demo-${btoa(email).slice(0, 10)}`,
       email,
@@ -137,9 +190,22 @@ export async function register({ email, password, displayName, role }) {
   try {
     const cred = await createUserWithEmailAndPassword(firebaseAuth, email, password);
     if (displayName) await updateProfile(cred.user, { displayName });
-    const token = await cred.user.getIdToken();
+
+    let token = await cred.user.getIdToken();
     localStorage.setItem(TOKEN_KEY, token);
-    return normalize(cred.user, role);
+
+    // Save to Firestore users/{uid} document: { role, email, createdAt: serverTimestamp() }
+    const roleToClaim = role || ROLES.AUTHORITY;
+    await claimFirestoreRole(cred.user.uid, roleToClaim, email);
+
+    // Call POST /auth/claim-role to bind the selected role.
+    await api.post('/auth/claim-role', { role: roleToClaim }).then(unwrap);
+
+    // Force refresh token to bake custom claims in.
+    token = await cred.user.getIdToken(true);
+    localStorage.setItem(TOKEN_KEY, token);
+
+    return normalize(cred.user, roleToClaim);
   } catch (err) {
     throw new Error(prettifyFirebaseError(err));
   }
@@ -180,11 +246,15 @@ export function subscribe(cb) {
   }
   return onAuthStateChanged(firebaseAuth, async (fbUser) => {
     if (!fbUser) return cb(null);
+    let verifiedRole = null;
     try {
       const token = await fbUser.getIdToken();
       localStorage.setItem(TOKEN_KEY, token);
-    } catch { /* non-fatal */ }
-    cb(normalize(fbUser, getStoredRole()));
+      verifiedRole = await getFirestoreRole(fbUser.uid);
+    } catch (err) {
+      console.error('onAuthStateChanged role check failed:', err);
+    }
+    cb(normalize(fbUser, verifiedRole));
   });
 }
 
@@ -245,4 +315,6 @@ export default {
   getIdToken,
   getStoredRole,
   resetPassword,
+  getFirestoreRole,
+  claimFirestoreRole,
 };

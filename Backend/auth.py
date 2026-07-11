@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 security = HTTPBearer(auto_error=False)
 
-_firebase_ready = False
+firebase_ready = False
 
 # Only initialize Firebase Admin if credentials are available.
 # In local development without a service account, the backend operates in
@@ -20,7 +20,7 @@ if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
         from firebase_admin import credentials, auth as fb_auth
         project_id = os.environ.get("GOOGLE_CLOUD_PROJECT", "epicast-d711a")
         firebase_admin.initialize_app(options={"projectId": project_id})
-        _firebase_ready = True
+        firebase_ready = True
         logger.info(f"✅ Firebase Admin initialized (project: {project_id}).")
     except Exception as e:
         logger.error(f"Firebase Admin init failed: {e}")
@@ -52,7 +52,7 @@ async def verify_token(
     if is_production:
         if not credentials:
             raise HTTPException(status_code=401, detail="Authorization header required.")
-        if not _firebase_ready:
+        if not firebase_ready:
             raise HTTPException(
                 status_code=503,
                 detail="Auth service not configured. Set GOOGLE_APPLICATION_CREDENTIALS.",
@@ -65,10 +65,10 @@ async def verify_token(
             raise HTTPException(status_code=401, detail="Invalid authentication credentials.")
 
     # ── Development: bypass when Firebase is not configured ────────────────
-    if not _firebase_ready or skip_auth_flag:
+    if not firebase_ready or skip_auth_flag:
         # Support structured demo tokens: e.g. "demo.clinic.uid" or "demo.authority.uid"
         raw = credentials.credentials if credentials else ""
-        role = "authority"
+        role = "clinic"
         uid = "dev_user"
         if raw.startswith("demo."):
             parts = raw.split(".")
