@@ -247,7 +247,7 @@ export default function Dashboard() {
                 <div className="eyebrow mb-1 truncate">Operations</div>
                 <h2 className="text-[16px] font-semibold tracking-tight truncate">Active alerts</h2>
               </div>
-              <Button variant="ghost" size="sm" iconRight={ArrowUpRight} className="shrink-0">View all</Button>
+              <Button variant="ghost" size="sm" iconRight={ArrowUpRight} className="shrink-0" onClick={() => navigate('/authority/alerts')}>View all</Button>
             </div>
             <div className="px-5 sm:px-6 py-3 flex-1 min-h-0 overflow-y-auto">
               <AsyncBoundary
