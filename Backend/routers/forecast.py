@@ -1,7 +1,9 @@
 import logging
-import pandas as pd
 from typing import List, Optional
+
+import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
+
 from database import get_db
 from models import ForecastResponse, TrendResponse
 from services.forecasting import build_forecast, build_trend_summary
@@ -19,9 +21,9 @@ async def get_disease_forecast(
     7-day forward forecast for a given disease.
 
     Model selection is automatic based on available data:
-    - ≥14 days → Weighted Moving Average (best)
-    - 7–13 days → Simple Moving Average
-    - 2–6 days → Linear Regression (fallback, less reliable)
+    - >=14 days -> Weighted Moving Average (best)
+    - 7-13 days -> Simple Moving Average
+    - 2-6 days -> Linear Regression (fallback, less reliable)
 
     Also returns trend (Rising / Stable / Declining) with % change.
     """
@@ -40,11 +42,10 @@ async def get_disease_forecast(
         df = pd.read_sql_query(sql, conn, params=params)
 
     if df.empty:
-        # No case data – generate a minimal placeholder forecast so the endpoint
-        # always returns a valid ForecastResponse (avoids 500 / CORS block).
-        dummy_dates = pd.date_range(end=pd.Timestamp.utcnow(), periods=2).strftime("%Y-%m-%d")
-        dummy_df = pd.DataFrame({"timestamp": dummy_dates, "count": [0, 0]})
-        return {"disease_name": disease_name, **build_forecast(dummy_df)}
+        raise HTTPException(
+            status_code=404,
+            detail=f"No forecast available for '{disease_name}'.",
+        )
 
     try:
         result = build_forecast(df)
@@ -60,7 +61,7 @@ async def get_disease_trend(
     area_id: Optional[str] = Query(None),
 ):
     """
-    Lightweight trend snapshot for a disease — no forecast, just:
+    Lightweight trend snapshot for a disease - no forecast, just:
     - Rising / Stable / Declining label
     - % change (current 7 days vs prior 7 days)
     - Human-readable summary sentence
@@ -116,7 +117,6 @@ async def get_all_trends():
         daily = df_disease.set_index("timestamp").resample("D")["count"].sum().fillna(0)
         results.append(build_trend_summary(disease, daily))
 
-    # Sort: Rising first, then Stable, then Declining
     order = {"Rising": 0, "Stable": 1, "Declining": 2}
     results.sort(key=lambda r: order[r["trend"]])
 

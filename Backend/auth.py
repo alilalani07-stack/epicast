@@ -1,3 +1,5 @@
+import base64
+import json
 import os
 import logging
 from fastapi import HTTPException, Security
@@ -66,11 +68,14 @@ async def verify_token(
 
     # ── Development: bypass when Firebase is not configured ────────────────
     if not firebase_ready or skip_auth_flag:
-        # Support structured demo tokens: e.g. "demo.clinic.uid" or "demo.authority.uid"
         raw = credentials.credentials if credentials else ""
         role = "clinic"
         uid = "dev_user"
+        email = f"{uid}@epicast.local"
+        decoded_payload = {}
+
         if raw.startswith("demo."):
+            # Structured demo token: "demo.role.uid"
             parts = raw.split(".")
             if len(parts) >= 3:
                 role = parts[1]
@@ -78,10 +83,41 @@ async def verify_token(
             elif len(parts) == 2:
                 uid = parts[1]
         else:
-            uid = raw or "dev_user"
-            
-        logger.debug(f"Auth bypass — uid='{uid}', role='{role}' (Firebase not configured or SKIP_AUTH=true).")
-        return {"uid": uid, "email": f"{uid}@epicast.local", "role": role}
+            # Real Firebase JWT — decode the payload to extract the real UID
+            # instead of storing the raw token as clinic_id (which caused the data leak).
+            try:
+                payload_b64 = raw.split(".")[1]
+                # Pad for base64url decoding
+                pad = 4 - len(payload_b64) % 4
+                if pad != 4:
+                    payload_b64 += "=" * pad
+                decoded_bytes = base64.urlsafe_b64decode(payload_b64)
+                decoded_payload = json.loads(decoded_bytes)
+                uid = (
+                    decoded_payload.get("sub")
+                    or decoded_payload.get("user_id")
+                    or decoded_payload.get("uid")
+                )
+                email = decoded_payload.get("email", email)
+                role = decoded_payload.get("role", "clinic")
+            except Exception:
+                logger.warning("Failed to parse JWT payload — uid will be None")
+                uid = None
+
+        logger.debug(
+            f"Auth bypass — uid='{uid}', role='{role}' "
+            f"(Firebase not configured or SKIP_AUTH=true)."
+        )
+        result = {
+            "sub": decoded_payload.get("sub", uid),
+            "user_id": decoded_payload.get("user_id", uid),
+            "uid": uid,
+            "email": email,
+            "role": role,
+        }
+        if decoded_payload:
+            result["decoded_token"] = decoded_payload
+        return result
 
     # ── Development with real Firebase credentials configured ──────────────
     if not credentials:

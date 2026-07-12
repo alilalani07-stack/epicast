@@ -11,7 +11,33 @@ function typeBadge(type) {
   );
 }
 
-export default function ReportsTable({ reports = [], onRowClick }) {
+/**
+ * Shorten a raw Firebase UID or arbitrary string to a readable clinic label.
+ */
+function formatClinicId(id, clinicsMap = {}) {
+  if (!id || id === '—') return <span className="text-faint text-[12px] italic">System / Seeded</span>;
+  if (clinicsMap[id]) return <span className="text-[13.5px] text-ink-2 font-medium">{clinicsMap[id]}</span>;
+
+  if (id.startsWith('demo-')) {
+    try {
+      const email = atob(id.slice(5));
+      return <span className="text-[13.5px] text-ink-2 font-medium">{email.split('@')[0]} Clinic</span>;
+    } catch {
+      return <span className="text-[13.5px] text-ink-2 font-medium">Demo Clinic ({id.slice(5, 11)})</span>;
+    }
+  }
+
+  if (id === 'dev_user') return <span className="text-[13.5px] text-ink-2 font-medium">Central Development Clinic</span>;
+
+  const label = id.length > 12 ? `${id.slice(0, 10)}…` : id;
+  return (
+    <span className="font-mono text-[12px] text-mute animate-pulse" title={id}>
+      Clinic ({label})
+    </span>
+  );
+}
+
+export default function ReportsTable({ reports = [], areasMap = new Map(), clinicsMap = {}, onRowClick }) {
   if (!reports.length) {
     return (
       <EmptyState
@@ -35,7 +61,7 @@ export default function ReportsTable({ reports = [], onRowClick }) {
       </THead>
       <TBody>
         {reports.map((r) => (
-          <TR key={r.id} onClick={() => onRowClick?.(r)}>
+          <TR key={r.id} onClick={() => onRowClick?.(r)} className="cursor-pointer">
             <TD>
               <span className="text-faint">#</span>
               <span className="text-ink-2">{r.id}</span>
@@ -49,9 +75,13 @@ export default function ReportsTable({ reports = [], onRowClick }) {
                 <span className="font-semibold text-ink">{r.disease}</span>
               </div>
             </TD>
-            <TD>{r.area}</TD>
+            <TD title={r.area}>
+              <span className="truncate max-w-[160px] inline-block">
+                {areasMap.get(r.area) || r.area || '—'}
+              </span>
+            </TD>
             <TD align="right" className="font-semibold text-ink text-[15px]">{r.count}</TD>
-            <TD><span className="text-mute">{r.submittedBy}</span></TD>
+            <TD>{formatClinicId(r.clinic_id, clinicsMap)}</TD>
             <TD><span className="text-mute">{r.date}</span></TD>
           </TR>
         ))}

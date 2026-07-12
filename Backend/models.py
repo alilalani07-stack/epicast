@@ -74,6 +74,7 @@ class ZoneResponse(BaseModel):
     disease_in_cluster: str
     nearby_reporting_clinics: int
     population_density: int
+    case_count: int
     state: str
 
 #Alerts
@@ -105,8 +106,14 @@ class DiseaseStats(BaseModel):
 class DashboardStats(BaseModel):
     active_cases_7d: int
     total_recorded_cases: int
+    total_report_count: int
     total_deaths: int
     new_alerts: int
+    active_alerts: int
+    high_risk_zone_count: int
+    total_reports_delta: Optional[float] = None
+    active_alerts_delta: Optional[float] = None
+    high_risk_zones_delta: Optional[float] = None
     disease_breakdown: List[DiseaseStats]
 
 
@@ -128,3 +135,35 @@ class TrendResponse(BaseModel):
     current_week_cases: int
     previous_week_cases: int
     summary: str
+
+
+#Hotspots and Area Stats
+
+class HotspotResponse(BaseModel):
+    id: str
+    primary_area: str
+    area_names: List[str]
+    area_count: int
+    lat: float
+    lon: float
+    disease: str
+    total_cases: int
+    zone_color: Literal["Green", "Yellow", "Red"]
+    risk_level: str
+    trend_pct: float
+
+
+class AreaStatsResponse(BaseModel):
+    area_id: str
+    area_name: str
+    lat: float
+    lon: float
+    state: str
+    population_density: int
+    case_count_7d: int
+    death_count_7d: int
+    active_alerts: int
+    risk_level: str
+    zone_color: Literal["Green", "Yellow", "Red"]
+    trend_pct: float
+    diseases: List[str]

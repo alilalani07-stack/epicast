@@ -1,8 +1,8 @@
-import { useState, useRef, useLayoutEffect } from 'react';
-import { useNavigate } from 'react-router-dom'; // ← added
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { motion, useReducedMotion } from 'framer-motion';
 import {
-  FileText, Bell, ShieldAlert, TrendingUp, ArrowUpRight, Sparkles, Activity, Download,
+  FileText, Bell, ShieldAlert, TrendingUp, ArrowUpRight, Activity, Download,
   RefreshCcw, Skull,
 } from 'lucide-react';
 
@@ -14,7 +14,7 @@ import Button from '../../components/ui/Button.jsx';
 import Badge from '../../components/ui/Badge.jsx';
 import AsyncBoundary from '../../components/ui/AsyncBoundary.jsx';
 import {
-  MetricCardSkeleton, MapSkeleton, ChartSkeleton, AlertFeedSkeleton, PanelSkeleton,
+  MetricCardSkeleton, MapSkeleton, ChartSkeleton, AlertFeedSkeleton,
 } from '../../components/ui/Skeleton.jsx';
 import EmptyState from '../../components/ui/EmptyState.jsx';
 import PageTransition from '../../components/layout/PageTransition.jsx';
@@ -38,92 +38,104 @@ const SECTION_GAP = 'mb-8 sm:mb-10 lg:mb-12';
 const PANEL_HEADER = 'px-5 sm:px-6 py-4';
 const GRID_GAP = 'gap-5 sm:gap-6';
 
-function useMatchHeight(breakpoint = 1024) {
-  const sourceRef = useRef(null);
-  const [height, setHeight] = useState(null);
-
-  useLayoutEffect(() => {
-    const el = sourceRef.current;
-    if (!el) return;
-
-    const mq = window.matchMedia(`(min-width: ${breakpoint}px)`);
-    const update = () => {
-      if (!mq.matches) {
-        setHeight(null);
-        return;
-      }
-      setHeight(el.getBoundingClientRect().height);
-    };
-
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    mq.addEventListener('change', update);
-    update();
-
-    return () => {
-      ro.disconnect();
-      mq.removeEventListener('change', update);
-    };
-  }, [breakpoint]);
-
-  return [sourceRef, height];
-}
-
 export default function Dashboard() {
   const reducedMotion = useReducedMotion();
-  const navigate = useNavigate(); // ← added
+  const navigate = useNavigate();
 
-  const metricsQ  = useAsync(() => dashboardService.getMetrics(), []);
-  const pointsQ   = useAsync(() => dashboardService.getMapPoints(), []);
-  const insightsQ = useAsync(() => dashboardService.getInsights(), []);
-  const alertsQ   = useAsync(() => alertsService.list(), []);
-  const reportsQ  = useAsync(() => reportsService.list(), []);
-  const forecastQ = useAsync(() => forecastService.getForecast('Dengue'), []);
+  const metricsQ = useAsync(() => dashboardService.getMetrics({ allowFallback: false }), []);
+  const pointsQ = useAsync(() => dashboardService.getMapPoints({ allowFallback: false }), []);
+  const alertsQ = useAsync(() => alertsService.list({}, { allowFallback: false }), []);
+  const reportsQ = useAsync(() => reportsService.list({}, { allowFallback: false }), []);
+  const filtersQ = useAsync(() => dashboardService.getFilters({ allowFallback: false }), []);
+
+  const topDisease = [...(metricsQ.data?.disease_breakdown || [])]
+    .sort((a, b) => (b.active_cases_7d ?? 0) - (a.active_cases_7d ?? 0))[0]?.disease_name || null;
+
+  const forecastQ = useAsync(
+    () => topDisease ? forecastService.getForecast(topDisease, { allowFallback: false }) : Promise.resolve(null),
+    [topDisease]
+  );
 
   const [mapFocus, setMapFocus] = useState(null);
-  const [forecastRef, operationsHeight] = useMatchHeight();
-  const [reportsRef, insightsHeight] = useMatchHeight();
 
-  const refreshAll = () => {
-    metricsQ.refetch(); pointsQ.refetch(); insightsQ.refetch();
-    alertsQ.refetch(); reportsQ.refetch(); forecastQ.refetch();
+  const areasMap = new Map((filtersQ.data?.areas || []).map((a) => [a.area_id, a.area_name]));
+
+  const refreshAll = async () => {
+    await metricsQ.refetch();
+    await Promise.all([
+      pointsQ.refetch(),
+      alertsQ.refetch(),
+      reportsQ.refetch(),
+      filtersQ.refetch(),
+      forecastQ.refetch(),
+    ]);
   };
 
   const hasLoadedOnce = Boolean(
-    metricsQ.data && pointsQ.data && insightsQ.data
-    && alertsQ.data && reportsQ.data && forecastQ.data,
+    metricsQ.data && pointsQ.data && alertsQ.data && reportsQ.data && filtersQ.data
   );
   const isRefreshing = hasLoadedOnce && (
-    metricsQ.loading || pointsQ.loading || insightsQ.loading
-    || alertsQ.loading || reportsQ.loading || forecastQ.loading
+    metricsQ.loading || pointsQ.loading || alertsQ.loading
+    || reportsQ.loading || filtersQ.loading || forecastQ.loading
   );
 
   const m = metricsQ.data || {};
   const recentReports = (reportsQ.data?.reports || []).slice(0, 6);
   const liveAlerts = (alertsQ.data?.alerts || []).filter((a) => a.status !== 'resolved').slice(0, 4);
+  const forecastMetricValue = forecastQ.data ? (forecastQ.data.trend_percent_change ?? 0) : '—';
 
-  const enter = (delay = 0, y = 12, duration = 0.45, ease) =>
+  const handleExport = () => {
+    const list = reportsQ.data?.reports || [];
+    if (!list.length) return;
+    const headers = ['ID', 'Type', 'Disease', 'Area', 'Date', 'Count', 'Clinic ID'];
+    const rows = list.map((r) => [
+      r.id,
+      r.type,
+      r.disease,
+      areasMap.get(r.area) || r.area || '—',
+      r.date,
+      r.count,
+      r.clinic_id || '—',
+    ].map((val) => `"${String(val || '').replace(/"/g, '""')}"`).join(','));
+
+    const csvContent = [headers.join(','), ...rows].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `epicast_reports_dashboard_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const enter = (delay = 0, y = 12, duration = 0.45, ease) => (
     reducedMotion
       ? { initial: { opacity: 1, y: 0 }, animate: { opacity: 1, y: 0 }, transition: { duration: 0 } }
-      : { initial: { opacity: 0, y }, animate: { opacity: 1, y: 0 }, transition: { duration, delay, ...(ease && { ease }) } };
+      : { initial: { opacity: 0, y }, animate: { opacity: 1, y: 0 }, transition: { duration, delay, ...(ease && { ease }) } }
+  );
 
   return (
     <PageTransition>
       <PageHeader
-        eyebrow={`Authority Portal · ${DEFAULT_REGION.name} · Live`}
+        eyebrow={`Authority Portal · ${DEFAULT_REGION.name}`}
         title="Outbreak Intelligence"
-        description={`A real-time view of disease activity, risk zones, alerts and forecasted trends across ${DEFAULT_REGION.name}.`}
-        actions={
+        description={`Current disease activity, risk zones, alerts and forecasted trends across ${DEFAULT_REGION.name}. Refresh to load the latest data.`}
+        actions={(
           <div className="flex flex-wrap items-center gap-3">
             <Button variant="secondary" icon={RefreshCcw} size="lg" onClick={refreshAll} disabled={isRefreshing}>
-              {isRefreshing ? 'Refreshing…' : 'Refresh'}
+              {isRefreshing ? 'Refreshing...' : 'Refresh'}
             </Button>
-            <Button variant="primary" icon={Download} size="lg">Export</Button>
+            <Button variant="primary" icon={Download} size="lg" onClick={handleExport} disabled={!recentReports.length}>
+              Export
+            </Button>
           </div>
-        }
+        )}
       />
 
-      {/* Metrics */}
+      {/* ── Row 1: KPI Cards ── */}
       <div className={SECTION_GAP}>
         <AsyncBoundary
           loading={metricsQ.loading}
@@ -134,24 +146,31 @@ export default function Dashboard() {
           <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 ${GRID_GAP}`}>
             <MetricCard index={0} label="Total reports" value={m.totalReports?.value ?? 0} delta={m.totalReports?.delta} deltaLabel="vs last 30d" icon={FileText} />
             <MetricCard index={1} label="Active alerts" value={m.activeAlerts?.value ?? 0} delta={m.activeAlerts?.delta} deltaLabel="vs last week" icon={Bell} />
-            <MetricCard index={2} label="High risk zones" value={m.highRiskZones?.value ?? 0} delta={m.highRiskZones?.delta} deltaLabel="this week" icon={ShieldAlert} />
-            <MetricCard index={3} label="Forecast growth" value={m.forecastGrowth?.value ?? 0} delta={m.forecastGrowth?.delta} deltaLabel="next 7d" icon={TrendingUp} suffix="%" format={(v) => Number(v).toFixed(1)} />
+            <MetricCard index={2} label="Critical zones" value={m.highRiskZones?.value ?? 0} delta={m.highRiskZones?.delta} deltaLabel="this week" icon={ShieldAlert} />
+            <MetricCard
+              index={3}
+              label="Forecast growth"
+              value={forecastMetricValue}
+              delta={m.forecastGrowth?.delta}
+              deltaLabel="next 7d"
+              icon={TrendingUp}
+              hint={forecastQ.error ? 'Unavailable' : undefined}
+              suffix={typeof forecastMetricValue === 'number' ? '%' : undefined}
+              format={(v) => Number(v).toFixed(1)}
+            />
           </div>
         </AsyncBoundary>
       </div>
 
-      {/* Map */}
-      <motion.div
-        {...enter(0.05, 14, 0.5, [0.22, 1, 0.36, 1])}
-        className={SECTION_GAP}
-      >
+      {/* ── Row 2: Intelligence Map ── */}
+      <motion.div {...enter(0.05, 14, 0.5, [0.22, 1, 0.36, 1])} className={SECTION_GAP}>
         <Panel padded={false} elevated className="overflow-hidden">
           <div className={`flex flex-col gap-4 border-b border-line ${PANEL_HEADER}`}>
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
               <div className="min-w-0">
                 <div className="eyebrow mb-1 truncate">Intelligence map · {DEFAULT_REGION.name}</div>
                 <h2 className="text-[19px] sm:text-[22px] lg:text-[25px] font-semibold tracking-tight flex flex-wrap items-center gap-x-3 gap-y-2">
-                  Live signals across regions
+                  Current signals across regions
                   <span className="inline-flex items-center gap-1.5 text-[12px] text-emerald-700 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-md font-medium shrink-0">
                     <span className="relative flex w-2 h-2" aria-hidden="true">
                       {!reducedMotion && (
@@ -159,7 +178,7 @@ export default function Dashboard() {
                       )}
                       <span className="relative w-2 h-2 rounded-full bg-emerald-500" />
                     </span>
-                    Live
+                    Latest sync
                   </span>
                 </h2>
                 <p className="text-[14px] text-mute mt-2">
@@ -175,14 +194,14 @@ export default function Dashboard() {
             </div>
             <div className="max-w-xl w-full">
               <LocationSearch
-                placeholder="Jump to a place — e.g. Madhapur, Charminar, Apollo Hyderabad"
-                onSelect={(r) => setMapFocus({ 
-                  lat: r.lat, 
-                  lng: r.lng, 
-                  zoom: DEFAULT_REGION.zoomDetail, 
+                placeholder="Jump to a place - e.g. Madhapur, Charminar, Apollo Hyderabad"
+                onSelect={(r) => setMapFocus({
+                  lat: r.lat,
+                  lng: r.lng,
+                  zoom: DEFAULT_REGION.zoomDetail,
                   label: r.label,
                   geojson: r.geojson,
-                  boundingbox: r.boundingbox
+                  boundingbox: r.boundingbox,
                 })}
               />
             </div>
@@ -192,9 +211,9 @@ export default function Dashboard() {
               loading={pointsQ.loading}
               error={pointsQ.error}
               onRetry={pointsQ.refetch}
-              skeleton={
-                <MapSkeleton className="h-full w-full" />
-              }
+              skeleton={<MapSkeleton className="h-full w-full" />}
+              isEmpty={!pointsQ.loading && !(pointsQ.data || []).length}
+              empty={<EmptyState icon={ShieldAlert} title="No risk zones available" description="Risk zones will appear here when reports are available." />}
             >
               <MapContainer
                 center={DEFAULT_REGION.center}
@@ -210,44 +229,72 @@ export default function Dashboard() {
         </Panel>
       </motion.div>
 
-      {/* Forecast + Alerts */}
+      {/* ── Row 3: Recent Reports (2/3) + Active Alerts (1/3) ── */}
       <div className={`grid grid-cols-1 lg:grid-cols-3 ${GRID_GAP} ${SECTION_GAP}`}>
-        <motion.div
-          {...enter(0.1)}
-          className="lg:col-span-2 min-w-0 self-start"
-          ref={forecastRef}
-        >
-          <Panel>
-            <SectionHeader
-              eyebrow="Forecast"
-              title="Dengue · 14-day projection"
-              description="Solid line is observed; dashed line is forecast."
-              actions={<Badge variant="info" dot>Confidence 86%</Badge>}
-            />
+        <motion.div {...enter(0.1)} className="lg:col-span-2 min-w-0 self-start">
+          <Panel padded={false}>
+            <div className={`flex items-center justify-between gap-3 border-b border-line ${PANEL_HEADER}`}>
+              <div className="min-w-0">
+                <div className="eyebrow mb-1 truncate">Surveillance</div>
+                <h2 className="text-[16px] font-semibold tracking-tight truncate">Recent reports</h2>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                iconRight={ArrowUpRight}
+                className="shrink-0"
+                onClick={() => navigate('/authority/reports')}
+              >
+                View all
+              </Button>
+            </div>
             <AsyncBoundary
-              loading={forecastQ.loading}
-              error={forecastQ.error}
-              onRetry={forecastQ.refetch}
-              skeleton={<ChartSkeleton height={300} />}
+              loading={reportsQ.loading || filtersQ.loading}
+              error={reportsQ.error || filtersQ.error}
+              onRetry={() => { reportsQ.refetch(); filtersQ.refetch(); }}
+              skeleton={<AlertFeedSkeleton count={6} />}
+              isEmpty={!reportsQ.loading && !recentReports.length}
+              empty={<EmptyState icon={FileText} title="No reports yet" description="New submissions will appear here." />}
               compactError
             >
-              <ForecastChart data={forecastQ.data || []} height={300} />
+              <div className="divide-y divide-line">
+                {recentReports.map((r) => (
+                  <div key={r.id} className="px-5 sm:px-6 py-4 flex items-center gap-4 hover:bg-surface-2/60 transition-colors">
+                    <div className="w-10 h-10 rounded-xl bg-surface-2 border border-line flex items-center justify-center text-ink-2 shrink-0">
+                      {r.type === 'death' ? <Skull className="w-4 h-4 text-red-600" /> : <Activity className="w-4 h-4" />}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <div className="text-[14px] font-medium truncate text-ink min-w-0">{r.disease}</div>
+                        <Badge variant={r.type === 'death' ? 'critical' : 'info'} className="shrink-0">
+                          {r.type === 'death' ? 'Death' : 'Case'}
+                        </Badge>
+                      </div>
+                      <div className="text-[13px] text-mute truncate mt-1">
+                        {areasMap.get(r.area) || r.area || '—'}
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className="text-[17px] font-semibold tabular-nums text-ink">{r.count}</div>
+                      <div className="text-[12px] text-faint mt-0.5 whitespace-nowrap">{r.date}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </AsyncBoundary>
           </Panel>
         </motion.div>
 
-        <motion.div
-          {...enter(0.15)}
-          className="min-w-0"
-          style={operationsHeight ? { height: operationsHeight } : undefined}
-        >
+        <motion.div {...enter(0.15)} className="min-w-0 self-start">
           <Panel padded={false} className="h-full flex flex-col">
             <div className={`flex items-center justify-between gap-3 border-b border-line shrink-0 ${PANEL_HEADER}`}>
               <div className="min-w-0">
                 <div className="eyebrow mb-1 truncate">Operations</div>
                 <h2 className="text-[16px] font-semibold tracking-tight truncate">Active alerts</h2>
               </div>
-              <Button variant="ghost" size="sm" iconRight={ArrowUpRight} className="shrink-0" onClick={() => navigate('/authority/alerts')}>View all</Button>
+              <Button variant="ghost" size="sm" iconRight={ArrowUpRight} className="shrink-0" onClick={() => navigate('/authority/alerts')}>
+                View all
+              </Button>
             </div>
             <div className="px-5 sm:px-6 py-3 flex-1 min-h-0 overflow-y-auto">
               <AsyncBoundary
@@ -270,101 +317,58 @@ export default function Dashboard() {
         </motion.div>
       </div>
 
-      {/* Recent Reports + Insights */}
-      <div className={`grid grid-cols-1 lg:grid-cols-3 ${GRID_GAP}`}>
-        <motion.div
-          {...enter(0.2)}
-          className="lg:col-span-2 min-w-0 self-start"
-          ref={reportsRef}
-        >
-          <Panel padded={false}>
-            <div className={`flex items-center justify-between gap-3 border-b border-line ${PANEL_HEADER}`}>
-              <div className="min-w-0">
-                <div className="eyebrow mb-1 truncate">Surveillance</div>
-                <h2 className="text-[16px] font-semibold tracking-tight truncate">Recent reports</h2>
-              </div>
-              {/* FIX: Added onClick handler to navigate to the Reports page.
-                  Assumes the route path is '/authority/reports'. Adjust if your
-                  router registers a different path for Reports.jsx. */}
-              <Button
-                variant="ghost"
-                size="sm"
-                iconRight={ArrowUpRight}
-                className="shrink-0"
-                onClick={() => navigate('/authority/reports')}
-              >
-                View all
-              </Button>
-            </div>
+      {/* ── Row 4: Forecast (2/3) + Top Disease Breakdown (1/3) ── */}
+      <div className={`grid grid-cols-1 lg:grid-cols-3 ${GRID_GAP} ${SECTION_GAP}`}>
+        <motion.div {...enter(0.2)} className="lg:col-span-2 min-w-0 self-start">
+          <Panel>
+            <SectionHeader
+              eyebrow="Forecast"
+              title={topDisease ? `${topDisease} · 7-day projection` : '7-day projection'}
+              description="Solid line is observed; dashed line is forecast."
+              actions={<Badge variant="info" dot>Model: {forecastQ.data?.model_used || 'Auto'}</Badge>}
+            />
             <AsyncBoundary
-              loading={reportsQ.loading}
-              error={reportsQ.error}
-              onRetry={reportsQ.refetch}
-              skeleton={<AlertFeedSkeleton count={6} />}
-              isEmpty={!reportsQ.loading && !recentReports.length}
-              empty={<EmptyState icon={FileText} title="No reports yet" description="New submissions will appear here." />}
+              loading={forecastQ.loading}
+              error={forecastQ.error}
+              onRetry={forecastQ.refetch}
+              skeleton={<ChartSkeleton height={300} />}
+              isEmpty={!forecastQ.loading && !forecastQ.error && !forecastQ.data}
+              empty={<EmptyState icon={TrendingUp} title="No forecast available" description="Forecast data will appear here once enough case reports are available." />}
               compactError
             >
-              <div className="divide-y divide-line">
-                {recentReports.map((r) => (
-                  <div key={r.id} className="px-5 sm:px-6 py-4 flex items-center gap-4 hover:bg-surface-2/60 transition-colors">
-                    <div className="w-10 h-10 rounded-xl bg-surface-2 border border-line flex items-center justify-center text-ink-2 shrink-0">
-                      {r.type === 'death' ? <Skull className="w-4 h-4 text-red-600" /> : <Activity className="w-4 h-4" />}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <div className="text-[14px] font-medium truncate text-ink min-w-0">{r.disease}</div>
-                        <Badge variant={r.type === 'death' ? 'critical' : 'info'} className="shrink-0">
-                          {r.type === 'death' ? 'Death' : 'Case'}
-                        </Badge>
-                      </div>
-                      <div className="text-[13px] text-mute truncate mt-1">
-                        {r.area} · {r.submittedBy}
-                      </div>
-                    </div>
-                    <div className="text-right shrink-0">
-                      <div className="text-[17px] font-semibold tabular-nums text-ink">{r.count}</div>
-                      <div className="text-[12px] text-faint mt-0.5 whitespace-nowrap">{r.date}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <ForecastChart data={forecastQ.data || []} height={300} />
             </AsyncBoundary>
           </Panel>
         </motion.div>
 
-        <motion.div
-          {...enter(0.25)}
-          className="min-w-0"
-          style={insightsHeight ? { height: insightsHeight } : undefined}
-        >
+        <motion.div {...enter(0.25)} className="min-w-0 self-start">
           <Panel className="h-full flex flex-col">
             <SectionHeader
-              eyebrow="Auto-generated"
-              title="Quick insights"
-              actions={<Sparkles className="w-4 h-4 text-faint" aria-hidden="true" />}
+              eyebrow="Risk summary"
+              title="Disease breakdown"
+              description={topDisease ? `Top signal: ${topDisease}` : 'No dominant disease signal yet.'}
             />
-            <div className="flex-1 min-h-0 overflow-y-auto">
+            <div className="flex-1 flex flex-col justify-center pb-5">
               <AsyncBoundary
-                loading={insightsQ.loading}
-                error={insightsQ.error}
-                onRetry={insightsQ.refetch}
-                skeleton={<div className="space-y-3"><PanelSkeleton lines={2} withHeader={false} /><PanelSkeleton lines={2} withHeader={false} /></div>}
-                isEmpty={!insightsQ.loading && !(insightsQ.data || []).length}
-                empty={<EmptyState icon={Sparkles} title="No insights yet" description="Insights will be generated as data arrives." />}
+                loading={metricsQ.loading}
+                error={metricsQ.error}
+                onRetry={metricsQ.refetch}
+                skeleton={<AlertFeedSkeleton count={3} />}
+                isEmpty={!metricsQ.loading && !metricsQ.data?.disease_breakdown?.length}
+                empty={<EmptyState icon={ShieldAlert} title="No disease data" description="Disease breakdown will appear once reports are submitted." />}
                 compactError
               >
                 <div className="space-y-3">
-                  {(insightsQ.data || []).slice(0, 5).map((insight) => (
-                    <div key={insight.id} className="p-4 rounded-xl bg-canvas border border-line min-w-0">
-                      <Badge
-                        variant={insight.tone === 'warning' ? 'warning' : insight.tone === 'success' ? 'success' : 'info'}
-                        dot
-                      >
-                        {insight.tone === 'warning' ? 'Watch' : insight.tone === 'success' ? 'OK' : 'Note'}
-                      </Badge>
-                      <div className="text-[14px] font-medium text-ink mt-3 break-words">{insight.title}</div>
-                      <p className="text-[13px] text-mute mt-2 leading-relaxed break-words">{insight.detail}</p>
+                  {(metricsQ.data?.disease_breakdown || []).slice(0, 5).map((d, i) => (
+                    <div
+                      key={d.disease_name}
+                      className="flex items-center justify-between gap-3 p-3 rounded-lg bg-surface-2 border border-line"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <span className="text-[12px] font-semibold text-faint w-5 text-center">{i + 1}</span>
+                        <span className="text-[14px] font-medium text-ink truncate">{d.disease_name}</span>
+                      </div>
+                      <span className="text-[14px] font-semibold tabular-nums text-ink shrink-0">{d.total_cases}</span>
                     </div>
                   ))}
                 </div>

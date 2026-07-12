@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState } from 'react';
 import { Filter, ArrowUpRight, ArrowDownRight, Minus, ShieldAlert } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -31,14 +31,11 @@ export default function RiskZones() {
   const [selected, setSelected] = useState(null);
   const [mapFocus, setMapFocus] = useState(null);
 
-  const [filters, setFilters] = useState({ diseases: [], areas: [] });
-
-  useEffect(() => {
-    dashboardService.getFilters().then(setFilters);
-  }, []);
+  const filtersQ = useAsync(() => dashboardService.getFilters({ allowFallback: false }), []);
+  const filters = filtersQ.data || { diseases: [], areas: [] };
 
   const { data, loading, error, refetch } = useAsync(
-    () => areasService.riskZones({ risk, disease }),
+    () => areasService.riskZones({ risk, disease }, { allowFallback: false }),
     [risk, disease]
   );
   const zones = data || [];
@@ -90,7 +87,7 @@ export default function RiskZones() {
                       <option key={r} value={r}>{r === 'all' ? 'All risk' : r}</option>
                     ))}
                   </Select>
-                  <Select value={disease} onChange={(e) => setDisease(e.target.value)} className="w-full sm:w-44">
+                  <Select value={disease} onChange={(e) => setDisease(e.target.value)} className="w-full sm:w-44" disabled={filtersQ.loading || !!filtersQ.error}>
                     <option value="all">All diseases</option>
                     {filters.diseases.map((d) => <option key={d} value={d}>{d}</option>)}
                   </Select>
@@ -163,6 +160,7 @@ export default function RiskZones() {
                       const isActive = active?.id === z.id;
                       return (
                         <button
+                          type="button"
                           key={z.id}
                           onClick={() => focusOnZone(z)}
                           aria-pressed={isActive}
@@ -180,7 +178,9 @@ export default function RiskZones() {
                           />
                           <div className="min-w-0 flex-1">
                             <div className="text-[13.5px] font-medium truncate text-ink">{z.area}</div>
-                            <div className="text-[11.5px] text-mute truncate">{z.disease}</div>
+                            <div className="text-[11.5px] text-mute truncate">
+                              {z.diseases && z.diseases.length > 0 ? z.diseases.join(', ') : 'No active diseases'}
+                            </div>
                           </div>
                           <div className="text-[13px] tabular-nums text-mute">{z.cases}</div>
                         </button>
@@ -204,7 +204,7 @@ export default function RiskZones() {
                   <Badge variant={active.risk} dot>{active.risk} risk</Badge>
                 </div>
                 <div className="grid grid-cols-2 gap-4 mt-6 text-[13px]">
-                  <Detail label="Disease" value={active.disease} />
+                  <Detail label="Diseases" value={active.diseases && active.diseases.length > 0 ? active.diseases.join(', ') : 'None'} />
                   <Detail label="Cases" value={active.cases} mono />
                   <Detail
                     label="Trend"
@@ -218,7 +218,7 @@ export default function RiskZones() {
                       </span>
                     }
                   />
-                  <Detail label="Updated" value={active.updated} />
+                  <Detail label="Window" value={active.windowLabel || 'Last 7 days'} />
                 </div>
               </Panel>
             ) : (

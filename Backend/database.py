@@ -1,10 +1,12 @@
 import sqlite3
 import logging
+import os
 from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
-DB_FILE = "epicast.db"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_FILE = os.path.join(BASE_DIR, "epicast.db")
 
 #Schema migrations
 
@@ -58,7 +60,7 @@ MIGRATIONS = [
             WHERE status = 'new';
     """),
     (5, """
-        ALTER TABLE alerts ADD COLUMN severity TEXT NOT NULL DEFAULT 'moderate' 
+        ALTER TABLE alerts ADD COLUMN severity TEXT NOT NULL DEFAULT 'moderate'
             CHECK(severity IN ('critical', 'high', 'moderate'));
     """),
     (6, """
@@ -69,6 +71,30 @@ MIGRATIONS = [
         ALTER TABLE reports ADD COLUMN lat REAL DEFAULT NULL;
         ALTER TABLE reports ADD COLUMN lng REAL DEFAULT NULL;
     """),
+    (8, """
+        CREATE TABLE alerts_new (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            area_id      TEXT    NOT NULL,
+            disease_name TEXT    NOT NULL,
+            message      TEXT    NOT NULL,
+            status       TEXT    NOT NULL DEFAULT 'new'
+                             CHECK(status IN ('new', 'acknowledged', 'resolved')),
+            severity     TEXT    NOT NULL DEFAULT 'moderate'
+                             CHECK(severity IN ('critical', 'high', 'moderate', 'low')),
+            created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+            updated_at   TEXT    NOT NULL DEFAULT (datetime('now'))
+        );
+        INSERT INTO alerts_new (id, area_id, disease_name, message, status, severity, created_at, updated_at)
+            SELECT id, area_id, disease_name, message, status, severity, created_at, updated_at FROM alerts;
+        DROP TABLE alerts;
+        ALTER TABLE alerts_new RENAME TO alerts;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_dedup
+            ON alerts(area_id, disease_name)
+            WHERE status = 'new'
+    """),
+    (9, """
+        ALTER TABLE reports ADD COLUMN clinic_name TEXT DEFAULT NULL;
+    """),
 ]
 
 #Connection management
@@ -78,7 +104,7 @@ def get_raw_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")   # Better concurrency
-    conn.execute("PRAGMA foreign_keys=ON")    # Enforce FK constraints
+    conn.execute("PRAGMA foreign_keys=OFF")   # Required for table rename during migration 8
     return conn
 
 

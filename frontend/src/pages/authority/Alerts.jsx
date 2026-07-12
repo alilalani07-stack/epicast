@@ -21,9 +21,8 @@ import Badge from '../../components/ui/Badge.jsx';
 import AsyncBoundary from '../../components/ui/AsyncBoundary.jsx';
 import { AlertFeedSkeleton } from '../../components/ui/Skeleton.jsx';
 import EmptyState from '../../components/ui/EmptyState.jsx';
+import Modal from '../../components/ui/Modal.jsx';
 import PageTransition from '../../components/layout/PageTransition.jsx';
-
-import AlertCard from '../../components/alerts/AlertCard.jsx';
 
 import useAsync from '../../hooks/useAsync.js';
 import useDebounce from '../../hooks/useDebounce.js';
@@ -69,8 +68,6 @@ function useAlertKeyboard({ alerts, selectedId, onSelect, onAck, onResolve, onCl
         if (a && a.status !== 'resolved') onResolve(a);
       } else if (e.key === 'Escape') {
         onClose();
-      } else if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-        // Let command palette handle this
       }
     };
     window.addEventListener('keydown', handler);
@@ -132,7 +129,7 @@ function AlertCommandPalette({ alerts, open, onClose, onSelect }) {
           {filtered.length === 0 ? (
             <div className="px-4 py-8 text-center text-mute text-[14px]">No alerts match "{deferredQ}"</div>
           ) : (
-            filtered.map((a, i) => (
+            filtered.map((a) => (
               <button
                 key={a.id}
                 onClick={() => { onSelect(a.id); onClose(); }}
@@ -169,9 +166,10 @@ export default function Alerts() {
   const [q, setQ] = useState(searchParams.get('q') || '');
   const [selectedId, setSelectedId] = useState(null);
   const [selectedIds, setSelectedIds] = useState(new Set());
-  const [density, setDensity] = useState('comfortable'); // 'compact' | 'comfortable'
+  const [density, setDensity] = useState('comfortable');
   const [showPalette, setShowPalette] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const debounced = useDebounce(q, 200);
   const listRef = useRef(null);
 
@@ -184,18 +182,27 @@ export default function Alerts() {
     setSearchParams(next, { replace: true });
   }, [status, severity, debounced, setSearchParams]);
 
-  // Fetch
+  // FIX: Added allowFallback: false so API errors surface instead of showing mock data
   const { data, loading, error, refetch } = useAsync(
-    () => alertsService.list({ severity }),
+    () => alertsService.list({ severity, status }, { allowFallback: false }),
+    [severity, status]
+  );
+
+  // Server-side per-status counts scoped by the same non-status filters
+  // (severity) — NOT status — so tab headers never change when switching
+  // between All/New/Ack/Resolved. Add disease/area here when those filter
+  // dropdowns are added to the Alerts page.
+  const { data: statsData } = useAsync(
+    () => alertsService.getStats({ severity }),
     [severity]
   );
 
   const alertList = data?.alerts || [];
+  const counts = statsData || { all: 0, new: 0, acknowledged: 0, resolved: 0 };
 
-  // Client-side filter + sort
+  // Client-side search only (status/severity already filtered by backend)
   const filtered = useMemo(() => {
     let out = alertList;
-    if (status !== 'all') out = out.filter((a) => a.status === status);
     if (debounced) {
       const t = debounced.toLowerCase();
       out = out.filter((a) =>
@@ -211,7 +218,7 @@ export default function Alerts() {
       if (sev !== 0) return sev;
       return new Date(b.createdAt || b.date || 0) - new Date(a.createdAt || a.date || 0);
     });
-  }, [alertList, status, debounced]);
+  }, [alertList, debounced]);
 
   // Grouped by severity for sticky headers
   const grouped = useMemo(() => {
@@ -222,13 +229,6 @@ export default function Alerts() {
     }
     return Object.entries(groups).sort((a, b) => SEVERITY_ORDER[a[0]] - SEVERITY_ORDER[b[0]]);
   }, [filtered]);
-
-  const counts = useMemo(() => ({
-    all: alertList.length,
-    new: alertList.filter((a) => a.status === 'new').length,
-    acknowledged: alertList.filter((a) => a.status === 'acknowledged').length,
-    resolved: alertList.filter((a) => a.status === 'resolved').length,
-  }), [alertList]);
 
   const selectedAlert = filtered.find((a) => a.id === selectedId) || null;
 
@@ -253,12 +253,39 @@ export default function Alerts() {
     }
   }, [refetch]);
 
+  const onDelete = useCallback(async () => {
+    if (!deleteTarget) return;
+    try {
+      await alertsService.remove(deleteTarget.id);
+      toast.success(`Deleted #${deleteTarget.id}`);
+      setDeleteTarget(null);
+      setSelectedId(null);
+      refetch();
+    } catch (err) {
+      toast.error(err?.message || 'Failed to delete');
+    }
+  }, [deleteTarget, refetch]);
+
   const bulkAck = useCallback(async () => {
     const ids = Array.from(selectedIds);
     if (!ids.length) return;
     setRefreshing(true);
-    await Promise.all(ids.map((id) => alertsService.acknowledge(id).catch(() => null)));
-    toast.success(`Acknowledged ${ids.length} alerts`);
+    let successCount = 0;
+    await Promise.all(
+      ids.map(async (id) => {
+        try {
+          await alertsService.acknowledge(id);
+          successCount++;
+        } catch {
+          // ignore individual item error
+        }
+      })
+    );
+    if (successCount === ids.length) {
+      toast.success(`Acknowledged ${ids.length} alerts`);
+    } else {
+      toast.success(`Acknowledged ${successCount} of ${ids.length} alerts successfully`);
+    }
     setSelectedIds(new Set());
     setRefreshing(false);
     refetch();
@@ -268,8 +295,22 @@ export default function Alerts() {
     const ids = Array.from(selectedIds);
     if (!ids.length) return;
     setRefreshing(true);
-    await Promise.all(ids.map((id) => alertsService.resolve(id).catch(() => null)));
-    toast.success(`Resolved ${ids.length} alerts`);
+    let successCount = 0;
+    await Promise.all(
+      ids.map(async (id) => {
+        try {
+          await alertsService.resolve(id);
+          successCount++;
+        } catch {
+          // ignore individual item error
+        }
+      })
+    );
+    if (successCount === ids.length) {
+      toast.success(`Resolved ${ids.length} alerts`);
+    } else {
+      toast.success(`Resolved ${successCount} of ${ids.length} alerts successfully`);
+    }
     setSelectedIds(new Set());
     setRefreshing(false);
     refetch();
@@ -583,6 +624,13 @@ export default function Alerts() {
                                   </button>
                                 </>
                               )}
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setDeleteTarget(a); }}
+                                className="p-1.5 rounded-md hover:bg-surface text-mute hover:text-red-600 transition-colors"
+                                title="Delete"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
                               <ChevronRight className={`w-4 h-4 text-faint transition-transform ${isSelected ? 'translate-x-0.5' : ''}`} />
                             </div>
                           </div>
@@ -658,10 +706,7 @@ export default function Alerts() {
                     <div className="grid grid-cols-2 gap-4 mb-6">
                       <DetailField label="Disease" value={selectedAlert.disease || selectedAlert.disease_name || '—'} />
                       <DetailField label="Area" value={selectedAlert.area || selectedAlert.area_id || '—'} />
-                      <DetailField label="Cases" value={selectedAlert.count ?? selectedAlert.cases ?? '—'} mono />
-                      <DetailField label="Trend" value={selectedAlert.trend ? `${selectedAlert.trend > 0 ? '+' : ''}${selectedAlert.trend}%` : '—'} mono />
-                      <DetailField label="Submitted by" value={selectedAlert.submittedBy || '—'} />
-                      <DetailField label="Updated" value={selectedAlert.updatedAt || selectedAlert.date || '—'} />
+                      <DetailField label="Updated" value={selectedAlert.updated_at || selectedAlert.date || '—'} />
                     </div>
 
                     {/* Action history */}
@@ -724,12 +769,28 @@ export default function Alerts() {
                         >
                           Resolve
                         </Button>
+                        <button
+                          onClick={() => setDeleteTarget(selectedAlert)}
+                          className="p-2 rounded-lg hover:bg-surface text-mute hover:text-red-600 transition-colors shrink-0"
+                          title="Delete alert"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </>
                     ) : (
-                      <div className="w-full flex items-center gap-2 text-[13px] text-emerald-700 bg-emerald-50 border border-emerald-100 px-4 py-3 rounded-xl">
-                        <CheckCheck className="w-4 h-4" />
-                        This alert has been resolved and archived.
-                      </div>
+                      <>
+                        <div className="flex-1 flex items-center gap-2 text-[13px] text-emerald-700 bg-emerald-50 border border-emerald-100 px-4 py-3 rounded-xl">
+                          <CheckCheck className="w-4 h-4" />
+                          This alert has been resolved and archived.
+                        </div>
+                        <button
+                          onClick={() => setDeleteTarget(selectedAlert)}
+                          className="p-2 rounded-lg hover:bg-surface text-mute hover:text-red-600 transition-colors shrink-0"
+                          title="Delete alert"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </>
                     )}
                   </div>
                 </Panel>
@@ -745,6 +806,20 @@ export default function Alerts() {
         open={showPalette}
         onClose={() => setShowPalette(false)}
         onSelect={setSelectedId}
+      />
+
+      {/* Delete confirmation */}
+      <Modal
+        open={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        title="Delete alert"
+        description={`Are you sure you want to delete alert #${deleteTarget?.id}? This action cannot be undone.`}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setDeleteTarget(null)}>Cancel</Button>
+            <Button variant="primary" onClick={onDelete} className="!bg-red-600 !border-red-600 hover:!bg-red-700">Delete</Button>
+          </>
+        }
       />
     </PageTransition>
   );

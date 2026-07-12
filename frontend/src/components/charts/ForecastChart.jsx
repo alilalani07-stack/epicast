@@ -5,6 +5,7 @@ import ChartTooltip from './ChartTooltip.jsx';
 
 export default function ForecastChart({ data = [], height = 360 }) {
   const boundary = data.find((d) => d.isForecastStart)?.date;
+
   return (
     <ResponsiveContainer width="100%" height={height}>
       <AreaChart data={data} margin={{ top: 12, right: 8, left: -4, bottom: 0 }}>

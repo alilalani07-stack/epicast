@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState } from 'react';
 import { Flame, Filter } from 'lucide-react';
 import { motion, useReducedMotion } from 'framer-motion';
 
@@ -30,14 +30,11 @@ export default function Hotspots() {
   const [disease, setDisease] = useState('all');
   const [mapFocus, setMapFocus] = useState(null);
 
-  const [filters, setFilters] = useState({ diseases: [], areas: [] });
-
-  useEffect(() => {
-    dashboardService.getFilters().then(setFilters);
-  }, []);
+  const filtersQ = useAsync(() => dashboardService.getFilters({ allowFallback: false }), []);
+  const filters = filtersQ.data || { diseases: [], areas: [] };
 
   const { data, loading, error, refetch } = useAsync(
-    () => areasService.hotspots({ risk, disease }),
+    () => areasService.hotspots({ risk, disease }, { allowFallback: false }),
     [risk, disease]
   );
   const hotspots = data || [];
@@ -92,7 +89,7 @@ export default function Hotspots() {
                     <option value="high">High</option>
                     <option value="critical">Critical</option>
                   </Select>
-                  <Select value={disease} onChange={(e) => setDisease(e.target.value)} className="w-full sm:w-44">
+                  <Select value={disease} onChange={(e) => setDisease(e.target.value)} className="w-full sm:w-44" disabled={filtersQ.loading || !!filtersQ.error}>
                     <option value="all">All diseases</option>
                     {filters.diseases.map((d) => <option key={d} value={d}>{d}</option>)}
                   </Select>

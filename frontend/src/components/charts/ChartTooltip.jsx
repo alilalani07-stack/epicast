@@ -1,10 +1,16 @@
 export default function ChartTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null;
+
+  // Filter out null/undefined values so the tooltip doesn't show phantom
+  // entries (e.g. "Forecast: —" on historical-only dates or vice-versa).
+  const visible = payload.filter((p) => p.value != null);
+  if (!visible.length) return null;
+
   return (
     <div className="bg-surface border border-line rounded-xl px-4 py-3 shadow-card min-w-[160px]">
       {label && <div className="text-[12.5px] text-mute mb-2 font-medium">{label}</div>}
       <div className="space-y-1.5">
-        {payload.map((p) => (
+        {visible.map((p) => (
           <div key={p.dataKey} className="flex items-center gap-3 text-[14px]">
             <span className="w-2.5 h-2.5 rounded-full" style={{ background: p.color }} />
             <span className="text-mute">{p.name}</span>

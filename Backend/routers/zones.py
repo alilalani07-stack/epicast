@@ -1,10 +1,18 @@
+"""
+zones.py — Risk zone and hotspot endpoints.
+
+Both endpoints consume ``compute_area_risks()`` from the risk engine as their
+single source of truth.  Alert generation is a side-effect of the zones endpoint
+(via ``refresh_alerts()`` from the alert engine).
+"""
 import logging
-from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from fastapi import APIRouter, Query
-from database import get_db, fetchall
-from models import ZoneResponse
-from services.geo import haversine_distance, calculate_zone_color, ZONE_RADIUS_KM
+from database import get_db
+from models import ZoneResponse, HotspotResponse
+from services.risk_engine import compute_area_risks
+from services.alert_engine import refresh_alerts
+from services.geo import haversine_distance, ZONE_RADIUS_KM
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/dashboard", tags=["3. Zones"])
@@ -16,123 +24,127 @@ async def get_risk_zones(
     days: int = Query(7, ge=1, le=90, description="Lookback window in days"),
 ):
     """
-    Compute and return risk zones for all areas that have filed reports
-    within the last `days` days.
+    Compute and return risk zones for every area with reports in the last
+    ``days`` days.  Zone color is determined by the central risk engine.
 
-    - Green  : Low density, isolated report
-    - Yellow : Medium density or moderate clustering
-    - Red    : High density + cluster OR ≥2 nearby facilities same disease
+    As a side-effect, alerts are generated / deduplicated for all elevated zones.
 
-    Red zones automatically generate alerts (deduplicated — one active alert
-    per area+disease pair at a time).
+    - Green  : Isolated, low-volume report
+    - Yellow : Possible spread (cluster or ≥10 cases)
+    - Red    : Confirmed cluster (≥2 nearby) or ≥50 cases in the window
     """
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-
     with get_db() as conn:
-        area_rows = fetchall(conn, "SELECT * FROM areas")
-        area_map = {r["area_id"]: dict(r) for r in area_rows}
+        area_risks = compute_area_risks(conn, disease_name=disease_name, days=days)
+        # Side-effect: generate alerts from the latest risk picture
+        refresh_alerts(conn, area_risks)
 
-        sql = """
-            SELECT area_id, disease_name, SUM(count) as total_count
-            FROM reports
-            WHERE report_type = 'case' AND timestamp >= ?
-        """
-        params: list = [cutoff]
-        if disease_name:
-            sql += " AND disease_name = ?"
-            params.append(disease_name.strip().title())
-        sql += " GROUP BY area_id, disease_name"
+    return [
+        {
+            "area_id":                  r["area_id"],
+            "area_name":                r["area_name"],
+            "lat":                      r["lat"],
+            "lon":                      r["lon"],
+            "zone_color":               r["zone_color"],
+            "disease_in_cluster":       r["disease"],
+            "nearby_reporting_clinics": r["cluster_count"],
+            "population_density":       r["population_density"],
+            "case_count":               r["case_count_7d"],
+            "state":                    r["state"],
+        }
+        for r in area_risks
+    ]
 
-        recent = fetchall(conn, sql, tuple(params))
 
-        if not recent:
-            return []
-
-        reported_set = {(r["area_id"], r["disease_name"]) for r in recent}
-        
-        case_count_map = {(r["area_id"], r["disease_name"]): r["total_count"] for r in recent}
-
-        zones: List[dict] = []
-        processed = set()
-
-        for row in recent:
-            source_id, disease = row["area_id"], row["disease_name"]
-            key = (source_id, disease)
-
-            if key in processed:
-                continue
-            processed.add(key)
-
-            source = area_map.get(source_id)
-            if not source:
-                logger.warning(f"Report references unknown area_id '{source_id}' — skipping.")
-                continue
-
-            cluster_count = 0
-            nearby_names: List[str] = []
-
-            for other_id, other in area_map.items():
-                if other_id == source_id:
-                    continue
-                if (other_id, disease) not in reported_set:
-                    continue
-                dist = haversine_distance(
-                    source["lat"], source["lon"], other["lat"], other["lon"]
-                )
-                if dist <= ZONE_RADIUS_KM:
-                    cluster_count += 1
-                    nearby_names.append(other["area_name"])
-
-            case_count_7d = case_count_map.get(key, 0)
-            zone_color = calculate_zone_color(
-                source["population_density"], cluster_count, case_count_7d
-            )
-
-            if zone_color == "Red":
-                _upsert_red_alert(conn, source_id, disease, source["area_name"], nearby_names)
-
-            zones.append({
-                "area_id": source_id,
-                "area_name": source["area_name"],
-                "lat": source["lat"],
-                "lon": source["lon"],
-                "zone_color": zone_color,
-                "disease_in_cluster": disease,
-                "nearby_reporting_clinics": cluster_count,
-                "population_density": source["population_density"],
-                "state": source["state"],
-            })
-
-    order = {"Red": 0, "Yellow": 1, "Green": 2}
-    zones.sort(key=lambda z: order[z["zone_color"]])
-
-    return zones
-
-#Internal helper to insert a Red Alert
-
-def _upsert_red_alert(
-    conn,
-    area_id: str,
-    disease_name: str,
-    area_name: str,
-    nearby_names: List[str],
+@router.get("/hotspots", response_model=List[HotspotResponse])
+async def get_hotspots(
+    disease_name: Optional[str] = Query(None, description="Filter by disease"),
+    days: int = Query(7, ge=1, le=90, description="Lookback window in days"),
 ):
     """
-    Insert a Red Zone alert only if one doesn't already exist with status='new'.
-    This prevents alert flooding on repeated zone calculations.
-    """
-    import sqlite3
-    nearby_str = ", ".join(nearby_names) if nearby_names else "nearby facilities"
-    message = (
-        f"🔴 Red Zone Alert: High-risk cluster of '{disease_name}' detected near "
-        f"{area_name}. Also reported at: {nearby_str}. Immediate review recommended."
-    )
+    Aggregate Red and Yellow zones into geographic clusters.
 
-    try:
-        conn.execute(
-            "INSERT INTO alerts (area_id, disease_name, message, severity) VALUES (?, ?, ?, ?)",
-            (area_id, disease_name, message, 'critical'),
-        )
-        logger.info(f"New Red Zone alert created: {area_id} / {disease_name}")
-    except sqlite3.IntegrityError:
-        pass
+    Returns one hotspot record per *cluster* (group of nearby areas reporting
+    the same disease), rather than one row per area.  This gives a true "hotspot"
+    view — useful for mapping and triage dashboards.
+
+    A cluster is formed when two or more elevated zones are within ZONE_RADIUS_KM
+    of each other and share a disease.  Single-area outbreaks with ≥20 cases are
+    also surfaced as solo hotspots.
+    """
+    with get_db() as conn:
+        area_risks = compute_area_risks(conn, disease_name=disease_name, days=days)
+
+    # Only consider elevated (Red or Yellow) zones
+    elevated = [r for r in area_risks if r["zone_color"] in ("Red", "Yellow")]
+
+    # A solo Green area with ≥20 cases is also a hotspot worth surfacing
+    notable_green = [
+        r for r in area_risks
+        if r["zone_color"] == "Green" and r["case_count_7d"] >= 20
+    ]
+    candidates = elevated + notable_green
+
+    # ── Geographic clustering ─────────────────────────────────────────────
+    clusters: List[dict] = []
+    assigned: set = set()
+
+    for zone in candidates:
+        key = (zone["area_id"], zone["disease"])
+        if key in assigned:
+            continue
+
+        # Build this cluster: all unassigned candidates within radius sharing disease
+        members = [zone]
+        assigned.add(key)
+
+        for other in candidates:
+            other_key = (other["area_id"], other["disease"])
+            if other_key in assigned:
+                continue
+            if other["disease"] != zone["disease"]:
+                continue
+            dist = haversine_distance(
+                zone["lat"], zone["lon"],
+                other["lat"], other["lon"],
+            )
+            if dist <= ZONE_RADIUS_KM:
+                members.append(other)
+                assigned.add(other_key)
+
+        total_cases = sum(m["case_count_7d"] for m in members)
+        max_trend   = max(m["trend_pct"] for m in members)
+
+        # Worst zone_color in the cluster determines hotspot severity
+        if any(m["zone_color"] == "Red" for m in members):
+            worst_color = "Red"
+            risk_level  = "critical"
+        elif any(m["zone_color"] == "Yellow" for m in members):
+            worst_color = "Yellow"
+            risk_level  = "high"
+        else:
+            worst_color = "Green"
+            risk_level  = "low"
+
+        # Centroid
+        centroid_lat = sum(m["lat"] for m in members) / len(members)
+        centroid_lon = sum(m["lon"] for m in members) / len(members)
+
+        clusters.append({
+            "id":           f"H-{zone['area_id']}-{zone['disease'][:3].upper()}",
+            "primary_area": zone["area_name"],
+            "area_names":   [m["area_name"] for m in members],
+            "area_count":   len(members),
+            "lat":          centroid_lat,
+            "lon":          centroid_lon,
+            "disease":      zone["disease"],
+            "total_cases":  total_cases,
+            "zone_color":   worst_color,
+            "risk_level":   risk_level,
+            "trend_pct":    max_trend,
+        })
+
+    # Sort: Red clusters first, then by total case count descending
+    order = {"Red": 0, "Yellow": 1, "Green": 2}
+    clusters.sort(key=lambda c: (order.get(c["zone_color"], 2), -c["total_cases"]))
+
+    return clusters

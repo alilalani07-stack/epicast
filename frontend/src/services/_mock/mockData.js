@@ -62,13 +62,13 @@ export const RISK_ZONES = HOTSPOTS.map((h) => ({
 }));
 
 const SUBMITTERS = [
-  'Apollo Hospital Hyderabad',
-  'KIMS Secunderabad',
-  'Care Hospital Banjara Hills',
-  'Yashoda Hospital Malakpet',
-  'Continental Hospitals Gachibowli',
-  'Sunshine Hospital Begumpet',
-  'NIMS Punjagutta',
+  'uid_apollo_001',
+  'uid_kims_002',
+  'uid_care_003',
+  'uid_yashoda_004',
+  'uid_continental_005',
+  'uid_sunshine_006',
+  'uid_nims_007',
 ];
 
 function buildReports(n = 64) {
@@ -96,13 +96,13 @@ function buildReports(n = 64) {
 export const REPORTS = buildReports(64);
 
 export const ALERTS = [
-  { id: 'AL-2041', title: 'Cholera surge in Charminar',       message: 'Case count exceeded the moderate threshold for three consecutive days. Recommend immediate field response.',  severity: 'critical',  status: 'active',       area: 'Charminar',    disease: 'Cholera',      time: '12 min ago' },
-  { id: 'AL-2040', title: 'Dengue uptrend in Madhapur',       message: 'A 32% week-over-week increase in confirmed cases. Vector control advised.',                                    severity: 'high',      status: 'active',       area: 'Madhapur',     disease: 'Dengue',       time: '1 h ago'    },
+  { id: 'AL-2041', title: 'Cholera surge in Charminar',       message: 'Case count exceeded the moderate threshold for three consecutive days. Recommend immediate field response.',  severity: 'critical',  status: 'new',          area: 'Charminar',    disease: 'Cholera',      time: '12 min ago' },
+  { id: 'AL-2040', title: 'Dengue uptrend in Madhapur',       message: 'A 32% week-over-week increase in confirmed cases. Vector control advised.',                                    severity: 'high',      status: 'new',          area: 'Madhapur',     disease: 'Dengue',       time: '1 h ago'    },
   { id: 'AL-2039', title: 'Influenza cluster in Hitech City', message: 'Localized cluster identified across two adjacent zones.',                                                       severity: 'critical',  status: 'acknowledged', area: 'Hitech City',  disease: 'Influenza',    time: '3 h ago'    },
   { id: 'AL-2038', title: 'COVID-19 baseline restored',       message: 'Case counts returned to baseline in Jubilee Hills. Alert can be closed after review.',                          severity: 'low',       status: 'resolved',     area: 'Jubilee Hills',disease: 'COVID-19',     time: 'Yesterday'  },
   { id: 'AL-2037', title: 'Malaria resurgence in Kukatpally', message: 'Surveillance flagged an unusual rise in case load along construction belts.',                                   severity: 'high',      status: 'acknowledged', area: 'Kukatpally',   disease: 'Malaria',      time: 'Yesterday'  },
-  { id: 'AL-2036', title: 'Measles flare in Dilsukhnagar',    message: 'Vaccination coverage analysis triggered a new advisory.',                                                       severity: 'moderate',  status: 'active',       area: 'Dilsukhnagar', disease: 'Measles',      time: '2 d ago'    },
-  { id: 'AL-2035', title: 'Chikungunya rise in LB Nagar',     message: 'New cases reported across four wards. Vector control deploying tomorrow.',                                      severity: 'moderate',  status: 'active',       area: 'LB Nagar',     disease: 'Chikungunya',  time: '2 d ago'    },
+  { id: 'AL-2036', title: 'Measles flare in Dilsukhnagar',    message: 'Vaccination coverage analysis triggered a new advisory.',                                                       severity: 'moderate',  status: 'new',          area: 'Dilsukhnagar', disease: 'Measles',      time: '2 d ago'    },
+  { id: 'AL-2035', title: 'Chikungunya rise in LB Nagar',     message: 'New cases reported across four wards. Vector control deploying tomorrow.',                                      severity: 'moderate',  status: 'new',          area: 'LB Nagar',     disease: 'Chikungunya',  time: '2 d ago'    },
 ];
 
 // Deterministic pseudo-random so charts look stable across reloads.
@@ -178,10 +178,4 @@ export const riskColor = (risk) =>
     critical: '#dc2626',
   }[risk] || '#6b6b66');
 
-export function dashboardInsights() {
-  return [
-    { id: 1, title: 'Dengue trending up across IT corridor',  detail: 'A correlated rise was detected across Madhapur, Hitech City and Gachibowli over the past 7 days.', tone: 'warning' },
-    { id: 2, title: 'Forecast model recalibrated',            detail: 'Confidence interval narrowed by 12% after the latest weekly retraining.',                          tone: 'info'    },
-    { id: 3, title: 'Cholera response acknowledged',          detail: 'Charminar field team confirmed receipt of advisory AL-2041.',                                       tone: 'success' },
-  ];
-}
+

@@ -1,6 +1,6 @@
 import logging
-from typing import List
-from fastapi import APIRouter, HTTPException
+from typing import List, Optional
+from fastapi import APIRouter, HTTPException, Query
 from database import get_db, area_exists, fetchall
 from models import AreaRegister, AreaResponse
 
@@ -44,10 +44,18 @@ async def register_area(payload: AreaRegister):
 
 
 @router.get("", response_model=List[AreaResponse])
-async def list_areas():
-    """Return all registered reporting areas, ordered by name."""
+async def list_areas(q: Optional[str] = Query(None, description="Search by area name or area_id")):
+    """Return all registered reporting areas, ordered by name. Optionally filter by name/id."""
     with get_db() as conn:
-        rows = fetchall(conn, "SELECT * FROM areas ORDER BY area_name")
+        if q:
+            pattern = f"%{q}%"
+            rows = fetchall(
+                conn,
+                "SELECT * FROM areas WHERE area_name LIKE ? OR area_id LIKE ? ORDER BY area_name",
+                (pattern, pattern),
+            )
+        else:
+            rows = fetchall(conn, "SELECT * FROM areas ORDER BY area_name")
     return [dict(r) for r in rows]
 
 

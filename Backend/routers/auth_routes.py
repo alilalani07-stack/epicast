@@ -13,6 +13,16 @@ class ClaimRoleRequest(BaseModel):
     role: Literal["authority", "clinic"] = Field(...)
 
 
+def _extract_token_uid(token_data: dict) -> str:
+    return (
+        token_data.get("sub")
+        or token_data.get("user_id")
+        or token_data.get("uid")
+        or token_data.get("id")
+        or token_data.get("userId")
+    )
+
+
 @router.post("/claim-role")
 async def claim_role(payload: ClaimRoleRequest, token_data: dict = Depends(verify_token)):
     """
@@ -21,7 +31,7 @@ async def claim_role(payload: ClaimRoleRequest, token_data: dict = Depends(verif
     overwrite an existing role claim — prevents an already-registered user
     from re-calling this to escalate/switch their own role.
     """
-    uid = token_data.get("uid")
+    uid = _extract_token_uid(token_data)
     if not uid:
         raise HTTPException(status_code=401, detail="Could not identify user.")
 
@@ -50,7 +60,7 @@ async def claim_role(payload: ClaimRoleRequest, token_data: dict = Depends(verif
 async def get_me(token_data: dict = Depends(verify_token)):
     """Return the caller's verified identity, including their real role."""
     return {
-        "uid": token_data.get("uid"),
+        "uid": _extract_token_uid(token_data),
         "email": token_data.get("email"),
-        "role": token_data.get("role"),  # None if never claimed
+        "role": token_data.get("role"),
     }

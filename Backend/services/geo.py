@@ -19,34 +19,24 @@ def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
 
 
 def calculate_zone_color(
-    population_density: int,
     cluster_count: int,
     case_count_7d: int = 0,
 ) -> Literal["Green", "Yellow", "Red"]:
     """
-    Determine risk zone color.
+    Determine risk zone color based on case volume and geographic clustering.
 
-    Rules (in descending priority):
-    - Red   : High-density area (>5000/km²) with ≥1 nearby cluster
-              OR ≥2 nearby facilities reporting the same disease
-              OR any area with 50+ cases in 7 days AND ≥1 nearby cluster
-    - Yellow: Medium-density (>2000/km²) with ≥1 cluster
-              OR high-density area (>8000/km²) with any recent reports
-              OR 20–49 cases in 7 days
-    - Green : Everything else
+    The ``population_density`` field in the database stores total population counts
+    (e.g. 215,000 people), not density per km², so it cannot be used reliably as a
+    density threshold.  Rules are therefore based purely on observable case data:
+
+    - Red    : ≥ 2 nearby areas reporting the same disease (cluster confirmed)
+               OR ≥ 50 cases in the last 7 days within a single area
+    - Yellow : ≥ 1 nearby area reporting the same disease (possible spread)
+               OR ≥ 10 cases in the last 7 days
+    - Green  : Isolated, low-volume report
     """
-    if (
-        (population_density > 5000 and cluster_count >= 1)
-        or cluster_count >= 2
-        or (case_count_7d >= 50 and cluster_count >= 1)
-    ):
+    if cluster_count >= 2 or case_count_7d >= 50:
         return "Red"
-
-    if (
-        (population_density > 2000 and cluster_count >= 1)
-        or population_density > 8000
-        or case_count_7d >= 20
-    ):
+    if cluster_count >= 1 or case_count_7d >= 10:
         return "Yellow"
-
     return "Green"

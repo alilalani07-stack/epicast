@@ -6,20 +6,20 @@ import clsx from 'clsx';
 
 const SEVERITY_META = {
   critical: { icon: ShieldAlert, badge: 'critical', label: 'Critical', accent: 'before:bg-red-500' },
-  high: { icon: AlertTriangle, badge: 'high', label: 'High', accent: 'before:bg-orange-500' },
+  high:     { icon: AlertTriangle, badge: 'high', label: 'High', accent: 'before:bg-orange-500' },
   moderate: { icon: Bell, badge: 'moderate', label: 'Moderate', accent: 'before:bg-amber-500' },
-  low: { icon: Info, badge: 'low', label: 'Low', accent: 'before:bg-emerald-500' },
+  low:      { icon: Info, badge: 'low', label: 'Low', accent: 'before:bg-emerald-500' },
 };
 
 const STATUS_META = {
-  active: { label: 'Active', variant: 'danger' },
+  new:          { label: 'New', variant: 'danger' },
   acknowledged: { label: 'Acknowledged', variant: 'warning' },
-  resolved: { label: 'Resolved', variant: 'success' },
+  resolved:     { label: 'Resolved', variant: 'success' },
 };
 
 export default function AlertCard({ alert, onAcknowledge, onResolve, index = 0, compact = false }) {
   const meta = SEVERITY_META[alert.severity] || SEVERITY_META.low;
-  const status = STATUS_META[alert.status] || STATUS_META.active;
+  const status = STATUS_META[alert.status] || STATUS_META.new;
   const Icon = meta.icon;
 
   return (
@@ -42,25 +42,29 @@ export default function AlertCard({ alert, onAcknowledge, onResolve, index = 0, 
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                <h4 className="text-[15.5px] font-semibold tracking-tight text-ink">{alert.title}</h4>
+                <h4 className="text-[15.5px] font-semibold tracking-tight text-ink">
+                  {alert.title || alert.message || `Alert #${alert.id}`}
+                </h4>
                 <Badge variant={meta.badge} dot>{meta.label}</Badge>
                 <Badge variant={status.variant} dot>{status.label}</Badge>
               </div>
-              <p className="text-[14px] text-mute mt-2 line-clamp-2 leading-relaxed">{alert.message}</p>
+              <p className="text-[14px] text-mute mt-2 line-clamp-2 leading-relaxed">
+                {alert.message || alert.title || 'No details available.'}
+              </p>
             </div>
           </div>
 
           {!compact && (
             <div className="flex items-center justify-between mt-5 pt-5 border-t border-line">
               <div className="flex items-center gap-3 text-[12.5px] text-mute">
-                <span>{alert.area}</span>
+                <span>{alert.area || alert.area_id || '—'}</span>
                 <span className="w-1 h-1 rounded-full bg-line-strong" />
-                <span>{alert.disease}</span>
+                <span>{alert.disease || alert.disease_name || '—'}</span>
                 <span className="w-1 h-1 rounded-full bg-line-strong" />
-                <span>{alert.time}</span>
+                <span>{alert.time || alert.date || '—'}</span>
               </div>
               <div className="flex items-center gap-2">
-                {alert.status === 'active' && (
+                {alert.status === 'new' && (
                   <Button size="sm" variant="ghost" icon={Check} onClick={() => onAcknowledge?.(alert)}>
                     Acknowledge
                   </Button>

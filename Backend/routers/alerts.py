@@ -13,7 +13,7 @@ async def get_alerts(
     status: Optional[str] = Query(None, pattern="^(new|acknowledged|resolved)$"),
     disease_name: Optional[str] = Query(None),
     area_id: Optional[str] = Query(None),
-    severity: Optional[str] = Query(None, pattern="^(critical|high|moderate)$"),
+    severity: Optional[str] = Query(None, pattern="^(critical|high|moderate|low)$"),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ):
@@ -50,6 +50,44 @@ async def get_alerts(
         "limit": limit,
         "offset": offset,
         "alerts": [dict(r) for r in rows],
+    }
+
+
+@router.get("/stats")
+async def get_alerts_stats(
+    disease_name: Optional[str] = Query(None),
+    area_id: Optional[str] = Query(None),
+    severity: Optional[str] = Query(None, pattern="^(critical|high|moderate|low)$"),
+):
+    """
+    Returns per-status alert counts scoped by the same non-status filters
+    (disease_name, area_id, severity) that the main list endpoint accepts.
+    The frontend uses these counts for the tab headers so that switching tabs
+    never resets the counts — the stats always reflect the current filter set.
+
+    Returns: { all: int, new: int, acknowledged: int, resolved: int }
+    """
+    where = "WHERE 1=1"
+    params: list = []
+
+    if disease_name:
+        where += " AND disease_name = ?"; params.append(disease_name.strip().title())
+    if area_id:
+        where += " AND area_id = ?"; params.append(area_id)
+    if severity:
+        where += " AND severity = ?"; params.append(severity)
+
+    with get_db() as conn:
+        all_count = conn.execute(f"SELECT COUNT(*) FROM alerts {where}", params).fetchone()[0]
+        new_count = conn.execute(f"SELECT COUNT(*) FROM alerts {where} AND status = 'new'", params).fetchone()[0]
+        ack_count = conn.execute(f"SELECT COUNT(*) FROM alerts {where} AND status = 'acknowledged'", params).fetchone()[0]
+        res_count = conn.execute(f"SELECT COUNT(*) FROM alerts {where} AND status = 'resolved'", params).fetchone()[0]
+
+    return {
+        "all": all_count,
+        "new": new_count,
+        "acknowledged": ack_count,
+        "resolved": res_count,
     }
 
 

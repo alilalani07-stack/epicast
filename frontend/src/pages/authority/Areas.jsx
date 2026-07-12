@@ -53,7 +53,10 @@ function AreaCardSkeleton() {
 export default function Areas() {
   const [q, setQ] = useState('');
   const debounced = useDebounce(q, 200);
-  const { data, loading, error, refetch } = useAsync(() => areasService.list({ q: debounced }), [debounced]);
+  const { data, loading, error, refetch } = useAsync(
+    () => areasService.list({ q: debounced }, { allowFallback: false }),
+    [debounced]
+  );
 
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ name: '', id: '', lat: '', lng: '', label: '', population_density: '', state: '' });
@@ -161,6 +164,11 @@ export default function Areas() {
                 transition={{ duration: 0.3, delay: (i % 9) * 0.03 }}
                 className="group p-6 bg-surface hover:bg-surface-2/60 transition-colors"
               >
+                {!(a.case_count_7d || a.death_count_7d || a.active_alerts || (a.diseases && a.diseases.length)) && (
+                  <div className="mb-4 rounded-xl border border-line bg-canvas px-3 py-2 text-[12px] text-mute">
+                    No recent outbreak activity in the last 7 days.
+                  </div>
+                )}
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
@@ -179,22 +187,44 @@ export default function Areas() {
                   </button>
                 </div>
 
-                <div className="mt-5 grid grid-cols-2 gap-4">
+                <div className="mt-5 grid grid-cols-2 gap-x-4 gap-y-3">
+                  <div>
+                    <div className="text-[10.5px] text-faint uppercase tracking-wider">7d Cases</div>
+                    <div className="text-[13.5px] text-ink font-semibold tabular-nums mt-1">
+                      {a.case_count_7d}
+                      {a.case_count_7d > 0 && a.trend_pct !== 0 && (
+                        <span className={`text-[10.5px] font-normal ml-1.5 ${a.trend_pct > 0 ? 'text-red-600' : 'text-emerald-700'}`}>
+                          ({a.trend_pct > 0 ? '+' : ''}{a.trend_pct}%)
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[10.5px] text-faint uppercase tracking-wider">7d Deaths</div>
+                    <div className="text-[13.5px] text-ink font-semibold tabular-nums mt-1">
+                      {a.death_count_7d}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[10.5px] text-faint uppercase tracking-wider">Active Alerts</div>
+                    <div className="text-[13.5px] text-ink font-semibold tabular-nums mt-1">
+                      {a.active_alerts}
+                    </div>
+                  </div>
                   <div>
                     <div className="text-[10.5px] text-faint uppercase tracking-wider">Population</div>
-                    <div className="text-[13.5px] text-ink tabular-nums flex items-center gap-1.5 mt-1">
-                      <Users className="w-3.5 h-3.5 text-mute" />
+                    <div className="text-[13.5px] text-ink tabular-nums mt-1">
                       {(a.population || 0).toLocaleString()}
                     </div>
                   </div>
-                  <div>
-                    <div className="text-[10.5px] text-faint uppercase tracking-wider">Coordinates</div>
-                    <div className="text-[13.5px] text-ink tabular-nums flex items-center gap-1.5 mt-1">
-                      <MapPin className="w-3.5 h-3.5 text-mute" />
-                      {a.lat?.toFixed(2)}, {a.lng?.toFixed(2)}
-                    </div>
-                  </div>
                 </div>
+
+                {a.diseases && a.diseases.length > 0 && (
+                  <div className="mt-4 pt-3 border-t border-line/60">
+                    <div className="text-[10.5px] text-faint uppercase tracking-wider mb-1">Active Diseases</div>
+                    <div className="text-[12px] text-mute truncate">{a.diseases.join(', ')}</div>
+                  </div>
+                )}
               </motion.div>
             ))}
           </div>

@@ -129,7 +129,7 @@ export async function signIn({ email, password, role }) {
     // Demo mode: any non-empty credential is accepted.
     if (role) setStoredRole(role);
     const user = {
-      uid: `demo-${btoa(email).slice(0, 10)}`,
+      uid: `demo-${btoa(email)}`,
       email,
       displayName: email.split('@')[0],
       photoURL: null,
@@ -177,7 +177,7 @@ export async function register({ email, password, displayName, role }) {
   if (!isFirebaseConfigured) {
     if (role) setStoredRole(role);
     const user = {
-      uid: `demo-${btoa(email).slice(0, 10)}`,
+      uid: `demo-${btoa(email)}`,
       email,
       displayName: displayName || email.split('@')[0],
       photoURL: null,

@@ -17,13 +17,15 @@ import dashboardService from '../../services/dashboard.service.js';
 import { useAuth } from '../../contexts/AuthContext.jsx';
 
 function initials(name = '') {
-  return name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((w) => w[0])
-    .join('')
-    .toUpperCase() || 'RC';
+  return (
+    name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((w) => w[0])
+      .join('')
+      .toUpperCase() || 'RC'
+  );
 }
 
 export default function Profile() {
@@ -31,35 +33,57 @@ export default function Profile() {
   const navigate = useNavigate();
 
   const [form, setForm] = useState({
-    clinicName: 'Riverside Clinic',
-    contactName: user?.displayName || 'Dr. M. Patel',
-    email: user?.email || 'mpatel@riversideclinic.org',
-    phone: '+91 98xxxxxxxx',
-    area: 'Central District',
+    clinicName: '',
+    contactName: '',
+    email: '',
+    phone: '',
+    area: '',      // area_id
+    areaName: '',  // display name
   });
 
   const [filters, setFilters] = useState({ areas: [] });
 
   useEffect(() => {
-    if (user) {
+    const saved = localStorage.getItem('clinic_profile');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        setForm((f) => ({
+          ...f,
+          ...parsed,
+          contactName: user?.displayName || parsed.contactName || '',
+          email: user?.email || parsed.email || '',
+        }));
+      } catch {
+        // ignore corrupt localStorage
+      }
+    } else if (user) {
       setForm((f) => ({
         ...f,
-        contactName: user.displayName || f.contactName,
-        email: user.email || f.email,
+        contactName: user.displayName || '',
+        email: user.email || '',
       }));
     }
   }, [user]);
 
   useEffect(() => {
-    dashboardService.getFilters().then(setFilters);
+    dashboardService.getFilters({ allowFallback: false }).then(setFilters).catch(() => {
+      toast.error('Could not load area options.');
+    });
   }, []);
 
-  const save = () => toast.success('Profile updated');
+  const save = () => {
+    localStorage.setItem('clinic_profile', JSON.stringify(form));
+    toast.success('Profile updated');
+  };
+
   const handleSignOut = async () => {
     await signOut();
     toast.success('Signed out');
     navigate('/', { replace: true });
   };
+
+  const selectedArea = filters.areas.find((a) => a.area_id === form.area);
 
   return (
     <PageTransition>
@@ -67,29 +91,69 @@ export default function Profile() {
         eyebrow="Clinic Portal"
         title="Clinic Profile"
         description="Information about your clinic and primary contact."
-        actions={<Button variant="primary" icon={Save} onClick={save}>Save changes</Button>}
+        actions={
+          <Button variant="primary" icon={Save} onClick={save}>
+            Save changes
+          </Button>
+        }
       />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
           <Panel>
-            <SectionHeader title="Details" description="How your clinic appears across the platform." />
+            <SectionHeader
+              title="Details"
+              description="How your clinic appears across the platform."
+            />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Field label="Clinic name">
-                <Input value={form.clinicName} onChange={(e) => setForm({ ...form, clinicName: e.target.value })} />
+                <Input
+                  value={form.clinicName}
+                  onChange={(e) =>
+                    setForm({ ...form, clinicName: e.target.value })
+                  }
+                />
               </Field>
               <Field label="Primary contact">
-                <Input value={form.contactName} onChange={(e) => setForm({ ...form, contactName: e.target.value })} />
+                <Input
+                  value={form.contactName}
+                  onChange={(e) =>
+                    setForm({ ...form, contactName: e.target.value })
+                  }
+                />
               </Field>
               <Field label="Email">
                 <Input type="email" value={form.email} readOnly />
               </Field>
               <Field label="Phone">
-                <Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+                <Input
+                  value={form.phone}
+                  onChange={(e) =>
+                    setForm({ ...form, phone: e.target.value })
+                  }
+                />
               </Field>
               <Field label="Primary area">
-                <Select value={form.area} onChange={(e) => setForm({ ...form, area: e.target.value })}>
-                  {filters.areas.map((a) => <option key={a.area_id} value={a.area_name}>{a.area_name}</option>)}
+                <Select
+                  value={form.area}
+                  onChange={(e) => {
+                    const areaId = e.target.value;
+                    const areaObj = filters.areas.find(
+                      (a) => a.area_id === areaId
+                    );
+                    setForm({
+                      ...form,
+                      area: areaId,
+                      areaName: areaObj?.area_name || '',
+                    });
+                  }}
+                >
+                  <option value="">Select area…</option>
+                  {filters.areas.map((a) => (
+                    <option key={a.area_id} value={a.area_id}>
+                      {a.area_name}
+                    </option>
+                  ))}
                 </Select>
               </Field>
             </div>
@@ -103,8 +167,12 @@ export default function Profile() {
                 {initials(form.clinicName)}
               </div>
               <div>
-                <div className="text-[15px] font-semibold tracking-tight text-ink">{form.clinicName}</div>
-                <div className="text-[11.5px] text-mute mt-0.5">Verified clinic</div>
+                <div className="text-[15px] font-semibold tracking-tight text-ink">
+                  {form.clinicName}
+                </div>
+                <div className="text-[11.5px] text-mute mt-0.5">
+                  Verified clinic
+                </div>
               </div>
             </div>
             <div className="space-y-2.5 text-[12.5px] text-ink-2">
@@ -114,11 +182,13 @@ export default function Profile() {
               </div>
               <div className="flex items-center gap-2">
                 <MapPin className="w-3.5 h-3.5 text-mute" />
-                {form.area}
+                {selectedArea?.area_name || form.areaName || form.area || '—'}
               </div>
             </div>
             <div className="mt-5 flex gap-2">
-              <Badge variant="success" dot>Active</Badge>
+              <Badge variant="success" dot>
+                Active
+              </Badge>
               <Badge variant="info">Tier 1</Badge>
             </div>
           </Panel>
@@ -128,7 +198,9 @@ export default function Profile() {
             <p className="text-[12.5px] text-mute mb-4">
               Sign out of EpiCast on this device.
             </p>
-            <Button variant="danger" icon={LogOut} onClick={handleSignOut}>Sign out</Button>
+            <Button variant="danger" icon={LogOut} onClick={handleSignOut}>
+              Sign out
+            </Button>
           </Panel>
         </div>
       </div>

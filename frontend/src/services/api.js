@@ -101,12 +101,13 @@ export const unwrap = (res) => res?.data;
  */
 const STRICT = import.meta.env.VITE_API_STRICT === 'true';
 
-export async function withFallback(promise, fallback) {
+export async function withFallback(promise, fallback, options = {}) {
+  const { enabled = true } = options;
   try {
     const result = await promise;
     return result;
   } catch (err) {
-    if (STRICT) throw err;
+    if (STRICT || !enabled) throw err;
     console.warn('[API] withFallback: using mock data due to error', err?.message ?? err);
     return typeof fallback === 'function' ? fallback() : fallback;
   }

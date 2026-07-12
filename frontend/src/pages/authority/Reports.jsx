@@ -1,5 +1,5 @@
-import { useMemo, useState, useEffect } from 'react';
-import { Search, Download, Filter, X, FileText } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { Search, Download, Filter, X, FileText, ChevronLeft, ChevronRight } from 'lucide-react';
 
 import PageHeader from '../../components/ui/PageHeader.jsx';
 import Panel from '../../components/ui/Panel.jsx';
@@ -19,6 +19,8 @@ import useDebounce from '../../hooks/useDebounce.js';
 import reportsService from '../../services/reports.service.js';
 import dashboardService from '../../services/dashboard.service.js';
 
+const PAGE_SIZE = 50;
+
 export default function Reports() {
   const [type, setType] = useState('all');
   const [disease, setDisease] = useState('all');
@@ -26,65 +28,110 @@ export default function Reports() {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [q, setQ] = useState('');
+  const [page, setPage] = useState(0);
   const debounced = useDebounce(q, 200);
 
-  const [filters, setFilters] = useState({ diseases: [], areas: [] });
+  const filtersQ = useAsync(() => dashboardService.getFilters({ allowFallback: false }), []);
+  const filters = filtersQ.data || { diseases: [], areas: [] };
 
-  useEffect(() => {
-    dashboardService.getFilters().then(setFilters);
-  }, []);
-
-  const params = { type, disease, area, from, to, q: debounced };
+  // ── Paginated filtered table rows ──────────────────────────────────────────
+  // The `type` tab filter is passed to the backend so the server returns only
+  // rows matching the selected type. This also makes `data.total` accurate for
+  // the selected type tab.
+  const listParams = {
+    type,
+    disease,
+    area,
+    from,
+    to,
+    q: debounced,
+    limit: PAGE_SIZE,
+    offset: page * PAGE_SIZE,
+  };
   const { data, loading, error, refetch } = useAsync(
-    () => reportsService.list(params),
-    [type, disease, area, from, to, debounced]
+    () => reportsService.list(listParams, { allowFallback: false }),
+    [type, disease, area, from, to, debounced, page]
   );
 
   const reports = data?.reports || [];
-  const counts = useMemo(() => ({
-    total: reports.length,
-    cases:  reports.filter((r) => r.type === 'case').length,
-    deaths: reports.filter((r) => r.type === 'death').length,
-  }), [reports]);
+  // `total` is the backend's count of ALL matching rows (not just this page)
+  const total = data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  // ── Server-side global totals for tab header counts ───────────────────────
+  // Three parallel /reports/stats calls — one per type — with the same
+  // disease/area/date/search filters so the tab counts always reflect the
+  // current filter state, not the page.
+  const statsBaseParams = { disease, area, from, to, q: debounced };
+  const allStatsQ    = useAsync(() => reportsService.getStats({ ...statsBaseParams },            { allowFallback: false }), [disease, area, from, to, debounced]);
+  const caseStatsQ   = useAsync(() => reportsService.getStats({ ...statsBaseParams, type: 'case' },  { allowFallback: false }), [disease, area, from, to, debounced]);
+  const deathStatsQ  = useAsync(() => reportsService.getStats({ ...statsBaseParams, type: 'death' }, { allowFallback: false }), [disease, area, from, to, debounced]);
+
+  // Map area_id -> area_name for resolving human-readable facility names
+  const areasMap = useMemo(
+    () => new Map((filters.areas || []).map((a) => [a.area_id, a.area_name])),
+    [filters.areas]
+  );
+
+  // Real-time clinic_id -> clinic_name map from the backend (not a hardcoded dict).
+  // Any clinic that has submitted a report will appear here with its human-readable name.
+  const clinicsQ = useAsync(
+    () => reportsService.getClinics({ allowFallback: false }),
+    []
+  );
+  const clinicsMap = clinicsQ.data || {};
+
+  const counts = {
+    all:    allStatsQ.data?.total_reports    ?? 0,
+    cases:  caseStatsQ.data?.total_cases     ?? 0,
+    deaths: deathStatsQ.data?.total_deaths   ?? 0,
+  };
+
+  // Reset page when filters change
+  const changeType = (v)    => { setType(v);    setPage(0); };
+  const changeDisease = (v) => { setDisease(v); setPage(0); };
+  const changeArea = (v)    => { setArea(v);    setPage(0); };
+  const changeFrom = (v)    => { setFrom(v);    setPage(0); };
+  const changeTo = (v)      => { setTo(v);      setPage(0); };
+  const changeQ = (v)       => { setQ(v);       setPage(0); };
 
   const reset = () => {
-    setType('all'); setDisease('all'); setArea('all'); setFrom(''); setTo(''); setQ('');
+    setType('all'); setDisease('all'); setArea('all');
+    setFrom(''); setTo(''); setQ(''); setPage(0);
   };
 
   const handleExport = () => {
     if (!reports.length) return;
-    const headers = ['ID', 'Type', 'Disease', 'Area', 'Date', 'Count', 'Submitted By'];
+    const headers = ['ID', 'Type', 'Disease', 'Area', 'Date', 'Count', 'Clinic ID'];
     const rows = reports.map(r => [
       r.id,
       r.type,
       r.disease,
-      r.area,
+      areasMap.get(r.area) || r.area || '—',
       r.date,
       r.count,
-      r.submittedBy
+      r.clinic_id || '—',
     ].map(val => `"${String(val || '').replace(/"/g, '""')}"`).join(','));
-    
+
     const csvContent = [headers.join(','), ...rows].join('\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
-    
+
     const link = document.createElement('a');
     link.setAttribute('href', url);
     link.setAttribute('download', `epicast_reports_${new Date().toISOString().slice(0, 10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    
-    // FIX: Revoke the object URL to free memory. Without this, blob URLs
-    // accumulate for the lifetime of the session.
+
     URL.revokeObjectURL(url);
   };
 
+  const firstRow = total === 0 ? 0 : page * PAGE_SIZE + 1;
+  const lastRow  = Math.min((page + 1) * PAGE_SIZE, total);
+
   return (
     <PageTransition>
-      {/* FIX (Category 1): Lock the entire content area to the viewport height
-          minus the navbar (72px). The page itself never scrolls; only the
-          table area scrolls internally. */}
       <div className="h-[calc(100vh-72px)] flex flex-col overflow-hidden">
         <div className="shrink-0">
           <PageHeader
@@ -96,8 +143,6 @@ export default function Reports() {
                 variant="secondary"
                 icon={Download}
                 onClick={handleExport}
-                // FIX (Category 6): Disable export when there is nothing to export
-                // or while the query is still loading.
                 disabled={!reports.length || loading}
               >
                 Export CSV
@@ -106,24 +151,19 @@ export default function Reports() {
           />
         </div>
 
-        {/* FIX (Category 1): Filter bar is shrink-0 so it never compresses.
-            mb-6 stays as the section gap. */}
         <div className="shrink-0 mb-6">
           <Panel padded={false}>
             <div className="p-5 lg:p-6 flex flex-col gap-4">
               <div className="flex flex-col lg:flex-row lg:items-center gap-3">
-                {/* FIX (Category 9): min-w-0 prevents the tabs from refusing to
-                    shrink on intermediate widths, which would push the search
-                    input off-screen. */}
                 <div className="min-w-0">
                   <Tabs
                     tabs={[
-                      { value: 'all', label: `All · ${counts.total}` },
-                      { value: 'case', label: `Case · ${counts.cases}` },
-                      { value: 'death', label: `Death · ${counts.deaths}` },
+                      { value: 'all',   label: `All · ${counts.all}`      },
+                      { value: 'case',  label: `Cases · ${counts.cases}`  },
+                      { value: 'death', label: `Deaths · ${counts.deaths}`},
                     ]}
                     value={type}
-                    onChange={setType}
+                    onChange={changeType}
                   />
                 </div>
                 <div className="flex-1 lg:max-w-sm">
@@ -131,7 +171,7 @@ export default function Reports() {
                     icon={Search}
                     placeholder="Search by disease, area, ID…"
                     value={q}
-                    onChange={(e) => setQ(e.target.value)}
+                    onChange={(e) => changeQ(e.target.value)}
                     className="w-full"
                   />
                 </div>
@@ -140,35 +180,28 @@ export default function Reports() {
 
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <FilterField label="Disease">
-                  {/* FIX (Category 8): w-full ensures the select fills its grid
-                      cell on mobile where the grid is 2-column. */}
-                  <Select value={disease} onChange={(e) => setDisease(e.target.value)} className="w-full">
+                  <Select value={disease} onChange={(e) => changeDisease(e.target.value)} className="w-full" disabled={filtersQ.loading || !!filtersQ.error}>
                     <option value="all">All diseases</option>
                     {filters.diseases.map((d) => <option key={d} value={d}>{d}</option>)}
                   </Select>
                 </FilterField>
                 <FilterField label="Area">
-                  <Select value={area} onChange={(e) => setArea(e.target.value)} className="w-full">
+                  <Select value={area} onChange={(e) => changeArea(e.target.value)} className="w-full" disabled={filtersQ.loading || !!filtersQ.error}>
                     <option value="all">All areas</option>
                     {filters.areas.map((a) => <option key={a.area_id} value={a.area_id}>{a.area_name}</option>)}
                   </Select>
                 </FilterField>
                 <FilterField label="From">
-                  <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="w-full" />
+                  <Input type="date" value={from} onChange={(e) => changeFrom(e.target.value)} className="w-full" />
                 </FilterField>
                 <FilterField label="To">
-                  <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="w-full" />
+                  <Input type="date" value={to} onChange={(e) => changeTo(e.target.value)} className="w-full" />
                 </FilterField>
               </div>
             </div>
           </Panel>
         </div>
 
-        {/* FIX (Categories 2, 4, 5): The table panel fills all remaining viewport
-            space (flex-1) and clips overflow (overflow-hidden). Inside, the
-            AsyncBoundary renders either a skeleton or the scrollable table.
-            overflow-auto on the table wrapper gives both vertical scrolling
-            (many rows) and horizontal scrolling (7 columns on mobile). */}
         <Panel padded={false} className="flex-1 min-h-0 overflow-hidden flex flex-col">
           <AsyncBoundary
             loading={loading}
@@ -179,8 +212,6 @@ export default function Reports() {
                 <TableSkeleton rows={8} cols={7} />
               </div>
             }
-            // FIX (Category 3): Explicit empty state instead of a blank gap when
-            // filters exclude every report.
             isEmpty={!reports.length}
             empty={
               <div className="h-full flex items-center justify-center px-6 py-8">
@@ -188,12 +219,42 @@ export default function Reports() {
               </div>
             }
           >
-            {/* ASSUMPTION: ReportsTable does not have its own overflow wrapper.
-                If it does, this creates a nested scroll trap — remove this div. */}
-            <div className="h-full overflow-auto">
-              <ReportsTable reports={reports} />
+            <div className="flex-1 overflow-auto">
+              <ReportsTable reports={reports} areasMap={areasMap} clinicsMap={clinicsMap} />
             </div>
           </AsyncBoundary>
+
+          {/* ── Pagination footer ── */}
+          {total > 0 && (
+            <div className="shrink-0 border-t border-line px-5 py-3 flex items-center justify-between gap-4 bg-canvas">
+              <span className="text-[13px] text-mute tabular-nums">
+                {firstRow}–{lastRow} of {total} records
+              </span>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={ChevronLeft}
+                  onClick={() => setPage((p) => Math.max(0, p - 1))}
+                  disabled={page === 0}
+                >
+                  Prev
+                </Button>
+                <span className="text-[13px] text-mute tabular-nums">
+                  {page + 1} / {totalPages}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  iconRight={ChevronRight}
+                  onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                  disabled={page >= totalPages - 1}
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
+          )}
         </Panel>
       </div>
     </PageTransition>
